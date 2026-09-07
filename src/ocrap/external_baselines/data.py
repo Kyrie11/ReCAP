@@ -26,6 +26,11 @@ from ocrap.models.data import (
 ACTOR_TOPO_FEATURE_DIM = 16
 MAP_TOPO_FEATURE_DIM = 14
 GAMEFORMER_STATE_DIM = 9
+SOURCE_AGENT_STATE_DIM = 9  # x,y,vx,vy,heading,length,width,type,valid
+SOURCE_CURRENT_STATE_DIM = 6  # x,y,heading,speed,longitudinal_accel,steering
+SOURCE_MAP_POINT_DIM = 6  # rel_x,rel_y,dx,dy,cos(theta),sin(theta)
+SOURCE_MAP_META_DIM = 4  # kind,on_route,traffic_control,speed_limit
+SOURCE_MAP_CENTER_DIM = 3  # x,y,heading
 
 # Read only arrays that external planners actually consume.  OC-RAP NPZs can
 # contain large teacher-future/debug tensors; decompressing those for imitation
@@ -359,6 +364,174 @@ def _history_scene_arrays(
     return ego_hist, neigh_hist, neigh_valid.astype(bool), origin, yaw0, rot
 
 
+
+def _source_scene_arrays(
+    d: dict[str, Any], cfg: dict[str, Any]
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Build candidate-independent scene tensors for source-ported planners.
+
+    The public GameFormer / PlanTF / PLUTO repositories consume actor histories
+    and vector-map polygons, not a tensor whose token axis is the executable
+    candidate lattice.  OC-RAP stores the same observable information in its
+    WOMD-derived NPZs, so this bridge reconstructs a source-like scene once per
+    scene/time group and lets the native-style model predict trajectories before
+    they are projected back onto the common executable candidate set.
+
+    No future/root/recovery teacher tensor is read here.  The only unavoidable
+    dataset adaptation is semantic: WOMD map kinds are kept as compact integer
+    categories rather than nuPlan lane-object classes.
+    """
+    mcfg = ((cfg.get("external_baselines", {}) or {}).get("model", {}) or {})
+    H = int(mcfg.get("history_len", 11))
+    A = max(1, int(mcfg.get("source_max_agents", int(mcfg.get("neighbors_to_predict", 8)) + 1)))
+    M = max(1, int(mcfg.get("source_map_polygons", mcfg.get("num_topology_map", 64))))
+    P = max(2, int(mcfg.get("source_map_points", 20)))
+
+    hist, valid, ego_state, origin, yaw0, rot = _history_frame(d)
+    agent = np.zeros((A, H, SOURCE_AGENT_STATE_DIM), dtype=np.float32)
+    agent_valid = np.zeros((A, H), dtype=bool)
+
+    if hist.ndim == 3 and hist.shape[0] > 0 and hist.shape[1] > 0:
+        hsel = hist[-H:]
+        if valid.ndim == 2 and valid.shape[:2] == hist.shape[:2]:
+            vsel = valid[-H:]
+        else:
+            vsel = np.ones(hsel.shape[:2], dtype=bool)
+
+        # The public PlanTF feature builder keeps the ego token first and then
+        # truncates surrounding actors after sorting them by current distance.
+        # Use the same deterministic ordering for all source ports so that the
+        # source_max_agents speed cap drops far-away actors rather than an
+        # arbitrary WOMD storage suffix.  Ordering depends only on observations.
+        actor_order: list[int] = [0]
+        nearby: list[tuple[float, int]] = []
+        for src_a in range(1, hsel.shape[1]):
+            jj = np.where(vsel[:, src_a])[0]
+            if jj.size == 0:
+                continue
+            raw_last = hsel[int(jj[-1]), src_a]
+            if raw_last.size < 2 or not np.isfinite(raw_last[:2]).all():
+                continue
+            nearby.append((float(np.linalg.norm(raw_last[:2] - origin)), int(src_a)))
+        nearby.sort(key=lambda x: (x[0], x[1]))
+        actor_order.extend(src_a for _dist, src_a in nearby[: max(A - 1, 0)])
+
+        t_off = H - hsel.shape[0]
+        for dst_a, src_a in enumerate(actor_order[:A]):
+            raw = hsel[:, src_a]
+            ok = vsel[:, src_a].astype(bool)
+            enc = np.zeros((hsel.shape[0], SOURCE_AGENT_STATE_DIM), dtype=np.float32)
+            if raw.shape[1] >= 2:
+                enc[:, :2] = (raw[:, :2] - origin[None, :]) @ rot.T
+            if raw.shape[1] >= 5:
+                enc[:, 2:4] = raw[:, 3:5] @ rot.T
+            heading = raw[:, 7] if raw.shape[1] > 7 else np.zeros((raw.shape[0],), dtype=np.float32)
+            enc[:, 4] = np.asarray(_wrap_angle(heading - yaw0), dtype=np.float32)
+            is_ego = src_a == 0
+            enc[:, 5] = raw[:, 10] if raw.shape[1] > 10 else (4.8 if is_ego else 4.5)
+            enc[:, 6] = raw[:, 11] if raw.shape[1] > 11 else (2.0 if is_ego else 1.9)
+            enc[:, 7] = raw[:, 13] if raw.shape[1] > 13 else 1.0
+            enc[:, 8] = ok.astype(np.float32)
+            agent[dst_a, t_off:] = np.nan_to_num(enc)
+            agent_valid[dst_a, t_off:] = ok
+
+    # PlanTF/PLUTO's first six current-state channels are
+    # [x, y, heading, longitudinal speed, longitudinal accel, steering].
+    # In the current-ego frame the first three are intentionally zero.  WOMD
+    # provides velocity/acceleration but not steering, so steering is the only
+    # unavailable source channel and is set to zero rather than inferred from a
+    # teacher/future trajectory.
+    current = np.zeros((SOURCE_CURRENT_STATE_DIM,), dtype=np.float32)
+    if agent_valid[0].any():
+        j = int(np.where(agent_valid[0])[0][-1])
+        current[3] = float(np.linalg.norm(agent[0, j, 2:4]))
+        # OC-RAP raw history keeps ax/ay at columns 5/6.  Project ax onto the
+        # current longitudinal axis when available.
+        if hist.ndim == 3 and hist.shape[-1] > 5:
+            raw_last = hist[-1, 0]
+            avec = np.asarray([raw_last[5], raw_last[6] if raw_last.size > 6 else 0.0], dtype=np.float32) @ rot.T
+            current[4] = float(avec[0])
+    elif ego_state.size >= 7:
+        current[3] = float(ego_state[6])
+
+    maps = np.asarray(d.get("map_polylines", np.zeros((0, 0, 0))), dtype=np.float32)
+    route = np.asarray(d.get("route", np.zeros((0, 2))), dtype=np.float32)
+    map_points = np.zeros((M, P, SOURCE_MAP_POINT_DIM), dtype=np.float32)
+    map_point_valid = np.zeros((M, P), dtype=bool)
+    map_meta = np.zeros((M, SOURCE_MAP_META_DIM), dtype=np.float32)
+    map_center = np.zeros((M, SOURCE_MAP_CENTER_DIM), dtype=np.float32)
+    map_valid = np.zeros((M,), dtype=bool)
+
+    rows: list[tuple[float, np.ndarray, np.ndarray]] = []
+    if maps.ndim == 3 and maps.shape[0] > 0 and maps.shape[-1] >= 2:
+        for mi in range(maps.shape[0]):
+            poly = maps[mi]
+            if poly.shape[-1] > 9:
+                ok = poly[:, 9] > 0.5
+            else:
+                ok = np.isfinite(poly[:, :2]).all(axis=-1) & (np.abs(poly[:, :2]).sum(axis=-1) > 1.0e-6)
+            ok &= np.isfinite(poly[:, :2]).all(axis=-1)
+            if int(ok.sum()) < 2:
+                continue
+            vv = poly[ok]
+            center = vv[:, :2].mean(axis=0)
+            rows.append((float(np.linalg.norm(center)), vv, center))
+    rows.sort(key=lambda z: z[0])
+
+    route_xy = route[:, :2] if route.ndim == 2 and route.shape[0] > 1 else np.zeros((0, 2), dtype=np.float32)
+    for i, (_dist0, vv, center) in enumerate(rows[:M]):
+        idx = np.linspace(0, len(vv) - 1, min(P, len(vv))).round().astype(int)
+        pts = vv[idx]
+        q = len(pts)
+        xy = pts[:, :2]
+        if pts.shape[1] >= 5:
+            vec = pts[:, 3:5]
+        else:
+            vec = np.diff(xy, axis=0, append=xy[-1:])
+        small = np.linalg.norm(vec, axis=-1) < 1.0e-6
+        if bool(small.any()):
+            fallback = np.diff(xy, axis=0, append=xy[-1:])
+            vec = np.where(small[:, None], fallback, vec)
+        theta = np.arctan2(vec[:, 1], vec[:, 0])
+        map_points[i, :q] = np.concatenate(
+            [xy - center[None, :], vec, np.cos(theta)[:, None], np.sin(theta)[:, None]], axis=-1
+        ).astype(np.float32)
+        map_point_valid[i, :q] = True
+        seg = xy[-1] - xy[0]
+        heading = float(np.arctan2(seg[1], seg[0])) if float(np.linalg.norm(seg)) > 1.0e-6 else 0.0
+        map_center[i] = np.asarray([center[0], center[1], heading], dtype=np.float32)
+        kind = float(np.median(pts[:, 5])) if pts.shape[1] > 5 else 0.0
+        speed = float(np.max(pts[:, 6])) if pts.shape[1] > 6 else 0.0
+        route_flag = float(np.max(pts[:, 7])) if pts.shape[1] > 7 else 0.0
+        if route_flag <= 0.0 and route_xy.size:
+            # WOMD parser does not always populate a route flag.  This uses only
+            # the observed planner route and map geometry, so it is deployable.
+            route_flag = float(np.min(np.linalg.norm(xy[:, None, :] - route_xy[None, :, :], axis=-1)) < 2.5)
+        traffic = float(np.max(pts[:, 8])) if pts.shape[1] > 8 else 0.0
+        map_meta[i] = np.asarray([kind, route_flag, traffic, speed], dtype=np.float32)
+        map_valid[i] = True
+
+    # Source PDM-Offset uses a 120-pose centerline.  Keep a compact observable
+    # centerline tensor available even though the shipped v54 closed-loop hybrid
+    # projection deliberately does not train an offset model on short-horizon
+    # OC-RAP prefixes (see fidelity audit).
+    R = max(2, int(mcfg.get("source_centerline_points", 120)))
+    centerline = np.zeros((R, 3), dtype=np.float32)
+    if route_xy.shape[0] >= 2:
+        ridx = np.linspace(0, route_xy.shape[0] - 1, R).round().astype(int)
+        rxy = route_xy[ridx]
+        rd = np.diff(rxy, axis=0, append=rxy[-1:])
+        rhead = np.arctan2(rd[:, 1], rd[:, 0])
+        centerline[:] = np.concatenate([rxy, rhead[:, None]], axis=-1)
+    else:
+        centerline[:, 0] = np.arange(R, dtype=np.float32)
+
+    return (
+        np.nan_to_num(agent), agent_valid, np.nan_to_num(current),
+        np.nan_to_num(map_points), map_point_valid, np.nan_to_num(map_meta),
+        np.nan_to_num(map_center), map_valid, np.nan_to_num(centerline),
+    )
+
 def _prefix_traj_array(
     d: dict[str, Any], cfg: dict[str, Any], origin: np.ndarray, rot: np.ndarray
 ) -> tuple[np.ndarray, np.ndarray]:
@@ -374,33 +547,94 @@ def _history_arrays(d: dict[str, Any], cfg: dict[str, Any]) -> tuple[np.ndarray,
     prefix_xy, prefix_valid = _prefix_traj_array(d, cfg, origin, rot)
     return ego_hist, neigh_hist, neigh_valid, prefix_xy, prefix_valid
 
+def _segments_intersect_numpy(line1_start: np.ndarray, line1_end: np.ndarray, line2_start: np.ndarray, line2_end: np.ndarray) -> np.ndarray:
+    """NumPy transcription of BeTop ``topo_utils.segments_intersect``."""
+    dx1 = line1_end[..., 0] - line1_start[..., 0]
+    dy1 = line1_end[..., 1] - line1_start[..., 1]
+    dx2 = line2_end[..., 0] - line2_start[..., 0]
+    dy2 = line2_end[..., 1] - line2_start[..., 1]
+    det = dx1 * dy2 - dx2 * dy1
+    good = np.abs(det) > 1.0e-12
+    num1 = (line2_start[..., 0] - line1_start[..., 0]) * dy2 - (line2_start[..., 1] - line1_start[..., 1]) * dx2
+    num2 = (line2_start[..., 0] - line1_start[..., 0]) * dy1 - (line2_start[..., 1] - line1_start[..., 1]) * dx1
+    t1 = np.divide(num1, det, out=np.zeros_like(num1, dtype=float), where=good)
+    t2 = np.divide(num2, det, out=np.zeros_like(num2, dtype=float), where=good)
+    return good & (t1 >= 0.0) & (t1 <= 1.0) & (t2 >= 0.0) & (t2 <= 1.0)
+
+
 def _crossing_binary(src_xy: np.ndarray, tgt_xy: np.ndarray, threshold: float = 3.0) -> bool:
-    """Binary behavior-braid proxy following BeTop's x-time crossing idea."""
-    T = min(src_xy.shape[0], tgt_xy.shape[0])
+    """Exact BeTop behavior-braid indicator on an OC-RAP future proxy.
+
+    ``generate_behavior_braids`` in the official repository swaps x/y, negates
+    the new x coordinate, then tests intersections of each trajectory in the
+    (transformed-x, normalized-time) plane.  Hence the braid coordinate is the
+    negative lateral coordinate and *not* a Euclidean-distance threshold.  The
+    target future available in the current serialized OC-RAP dataset is still an
+    observation-only constant-velocity extrapolation; that unavoidable label
+    source adaptation is documented in provenance rather than hidden here.
+    """
+    del threshold  # kept only for backward-compatible call sites
+    T = min(int(src_xy.shape[0]), int(tgt_xy.shape[0]))
     if T < 2:
         return False
-    src = src_xy[:T]
-    tgt = tgt_xy[:T]
-    dist = np.linalg.norm(src - tgt, axis=-1)
-    if bool(np.nanmin(dist) < threshold):
-        return True
-    # BeTop tests intersections in a projected braid plane.  Here we use signed
-    # longitudinal order change as the lightweight OC-RAP-compatible proxy.
-    rel0 = tgt[0] - src[0]
-    relT = tgt[-1] - src[-1]
-    fwd = src[-1] - src[0]
-    n = float(np.linalg.norm(fwd))
-    if n < 1e-3:
-        fwd = np.asarray([1.0, 0.0], dtype=np.float32)
-    else:
-        fwd = fwd / n
-    lon0 = float(np.dot(rel0, fwd))
-    lonT = float(np.dot(relT, fwd))
-    lat_min = float(np.min(np.abs((tgt - src) @ np.asarray([-fwd[1], fwd[0]], dtype=np.float32))))
-    return (lon0 * lonT < 0.0) and (lat_min < threshold)
+    src = np.asarray(src_xy[:T, :2], dtype=float)
+    tgt = np.asarray(tgt_xy[:T, :2], dtype=float)
+    finite = np.isfinite(src).all(axis=-1) & np.isfinite(tgt).all(axis=-1)
+    traj_t = np.linspace(0.0, 1.0, T, dtype=float)
+    # Official source: [...,[0,1]]=[y,x], then x=-x.
+    src_xt = np.stack([-src[:, 1], traj_t], axis=-1)
+    tgt_xt = np.stack([-tgt[:, 1], traj_t], axis=-1)
+    valid_seg = finite[:-1] & finite[1:]
+    if not bool(valid_seg.any()):
+        return False
+    inter = _segments_intersect_numpy(src_xt[:-1], src_xt[1:], tgt_xt[:-1], tgt_xt[1:])
+    return bool(np.any(inter & valid_seg))
 
 
-def _actor_topology_arrays(d: dict[str, Any], cfg: dict[str, Any]) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def _topology_scene_context(d: dict[str, Any], cfg: dict[str, Any]) -> dict[str, Any]:
+    """Preselect candidate-independent BeTop actor/map rows once per group.
+
+    All executable candidates in one OC-RAP group share the same current scene.
+    v57 rebuilt and resorted the identical actor/map observations for every
+    candidate.  This cache contains only observation-time quantities; all
+    candidate-dependent braid features/targets are still recomputed exactly.
+    """
+    Amax = max(_cfg_int(cfg, ("external_baselines", "model", "num_topology_agents"), _cfg_int(cfg, ("max_agents",), 16)), 1)
+    Mmax = max(_cfg_int(cfg, ("external_baselines", "model", "num_topology_map"), 64), 1)
+    T = _cfg_int(cfg, ("external_baselines", "model", "future_len"), 20)
+    ego_xy, _ = _resample_xy(_ego_prefix_xy(d), T)
+    e0 = ego_xy[0]
+
+    states, valid = _last_valid_agent_states(d.get("agent_history", np.zeros((0, 0, 0))), d.get("agent_valid", np.zeros((0, 0))))
+    actor_rows: list[tuple[float, np.ndarray, np.ndarray, np.ndarray]] = []
+    for a in range(1, states.shape[0]):
+        if not valid[a] or states.shape[1] < 2:
+            continue
+        st = states[a]
+        p0 = np.asarray([float(st[0]), float(st[1])], dtype=np.float32)
+        vel = np.asarray([float(st[3]) if st.size > 3 else 0.0, float(st[4]) if st.size > 4 else 0.0], dtype=np.float32)
+        actor_rows.append((float(np.linalg.norm(p0 - e0)), p0, vel, st))
+    actor_rows.sort(key=lambda z: z[0])
+
+    maps = np.asarray(d.get("map_polylines", np.zeros((0, 0, 0))), dtype=np.float32)
+    if maps.ndim != 3 or maps.shape[0] == 0 or maps.shape[2] < 2:
+        route = np.asarray(d.get("route", np.zeros((0, 2))), dtype=np.float32)
+        maps = route[None, :, :2] if route.ndim == 2 and route.shape[0] > 1 else np.zeros((0, 0, 2), dtype=np.float32)
+    map_rows: list[tuple[float, np.ndarray]] = []
+    if maps.ndim == 3:
+        for m in range(maps.shape[0]):
+            xy = maps[m, :, :2]
+            valid_xy = np.isfinite(xy).all(axis=-1) & (np.abs(xy).sum(axis=-1) > 1e-6)
+            if int(valid_xy.sum()) < 2:
+                continue
+            xy = xy[valid_xy]
+            center = xy.mean(axis=0)
+            map_rows.append((float(np.linalg.norm(center - e0)), xy))
+    map_rows.sort(key=lambda z: z[0])
+    return {"actor_rows": actor_rows[:Amax], "map_rows": map_rows[:Mmax]}
+
+
+def _actor_topology_arrays(d: dict[str, Any], cfg: dict[str, Any], scene_context: dict[str, Any] | None = None) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     Amax = _cfg_int(cfg, ("external_baselines", "model", "num_topology_agents"), _cfg_int(cfg, ("max_agents",), 16))
     Amax = max(Amax, 1)
     T = _cfg_int(cfg, ("external_baselines", "model", "future_len"), 20)
@@ -428,17 +662,20 @@ def _actor_topology_arrays(d: dict[str, Any], cfg: dict[str, Any]) -> tuple[np.n
     fwd = fwd / max(fwd_norm, 1e-6)
     left = np.asarray([-fwd[1], fwd[0]], dtype=np.float32)
 
-    states, valid = _last_valid_agent_states(d.get("agent_history", np.zeros((0, 0, 0))), d.get("agent_valid", np.zeros((0, 0))))
-    rows = []
-    for a in range(1, states.shape[0]):
-        if not valid[a] or states.shape[1] < 2:
-            continue
-        s = states[a]
-        p0 = np.asarray([float(s[0]), float(s[1])], dtype=np.float32)
-        v = np.asarray([float(s[3]) if s.size > 3 else 0.0, float(s[4]) if s.size > 4 else 0.0], dtype=np.float32)
-        d0 = float(np.linalg.norm(p0 - e0))
-        rows.append((d0, p0, v, s))
-    rows.sort(key=lambda x: x[0])
+    if scene_context is not None and "actor_rows" in scene_context:
+        rows = scene_context["actor_rows"]
+    else:
+        states, valid = _last_valid_agent_states(d.get("agent_history", np.zeros((0, 0, 0))), d.get("agent_valid", np.zeros((0, 0))))
+        rows = []
+        for a in range(1, states.shape[0]):
+            if not valid[a] or states.shape[1] < 2:
+                continue
+            s = states[a]
+            p0 = np.asarray([float(s[0]), float(s[1])], dtype=np.float32)
+            v = np.asarray([float(s[3]) if s.size > 3 else 0.0, float(s[4]) if s.size > 4 else 0.0], dtype=np.float32)
+            d0 = float(np.linalg.norm(p0 - e0))
+            rows.append((d0, p0, v, s))
+        rows.sort(key=lambda x: x[0])
     ts = np.arange(T, dtype=np.float32)[:, None] * dt
     for i, (d0, p0, v, s) in enumerate(rows[:Amax]):
         agent_xy = p0[None, :] + ts * v[None, :]
@@ -464,44 +701,57 @@ def _actor_topology_arrays(d: dict[str, Any], cfg: dict[str, Any]) -> tuple[np.n
     return np.nan_to_num(feats), targets.astype(np.float32), mask
 
 
-def _map_topology_arrays(d: dict[str, Any], cfg: dict[str, Any]) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def _map_topology_arrays(d: dict[str, Any], cfg: dict[str, Any], scene_context: dict[str, Any] | None = None) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """BeTop map-braid features/targets with source-exact nearest-polyline labels."""
     Mmax = _cfg_int(cfg, ("external_baselines", "model", "num_topology_map"), 64)
     Mmax = max(Mmax, 1)
     T = _cfg_int(cfg, ("external_baselines", "model", "future_len"), 20)
-    ego_xy, _ = _resample_xy(_ego_prefix_xy(d), T)
+    ego_xy, ego_valid = _resample_xy(_ego_prefix_xy(d), T)
     e0 = ego_xy[0]
     eT = ego_xy[-1]
-    maps = np.asarray(d.get("map_polylines", np.zeros((0, 0, 0))), dtype=np.float32)
     feats = np.zeros((Mmax, MAP_TOPO_FEATURE_DIM), dtype=np.float32)
     targets = np.zeros((Mmax,), dtype=np.float32)
     mask = np.zeros((Mmax,), dtype=bool)
-    if maps.ndim != 3 or maps.shape[0] == 0 or maps.shape[2] < 2:
-        route = np.asarray(d.get("route", np.zeros((0, 2))), dtype=np.float32)
-        if route.ndim == 2 and route.shape[0] > 1:
-            maps = route[None, :, :2]
-        else:
-            return feats, targets, mask
-    rows = []
-    for m in range(maps.shape[0]):
-        xy = maps[m, :, :2]
-        valid = np.isfinite(xy).all(axis=-1) & (np.abs(xy).sum(axis=-1) > 1e-6)
-        if int(valid.sum()) < 2:
-            continue
-        xy = xy[valid]
-        center = xy.mean(axis=0)
-        d0 = float(np.linalg.norm(center - e0))
-        rows.append((d0, xy))
-    rows.sort(key=lambda x: x[0])
-    for i, (d0, xy) in enumerate(rows[:Mmax]):
+    if scene_context is not None and "map_rows" in scene_context:
+        selected = scene_context["map_rows"][:Mmax]
+    else:
+        maps = np.asarray(d.get("map_polylines", np.zeros((0, 0, 0))), dtype=np.float32)
+        if maps.ndim != 3 or maps.shape[0] == 0 or maps.shape[2] < 2:
+            route = np.asarray(d.get("route", np.zeros((0, 2))), dtype=np.float32)
+            if route.ndim == 2 and route.shape[0] > 1:
+                maps = route[None, :, :2]
+            else:
+                return feats, targets, mask
+        rows: list[tuple[float, np.ndarray]] = []
+        for m in range(maps.shape[0]):
+            xy = maps[m, :, :2]
+            valid = np.isfinite(xy).all(axis=-1) & (np.abs(xy).sum(axis=-1) > 1e-6)
+            if int(valid.sum()) < 2:
+                continue
+            xy = xy[valid]
+            center = xy.mean(axis=0)
+            rows.append((float(np.linalg.norm(center - e0)), xy))
+        rows.sort(key=lambda x: x[0])
+        selected = rows[:Mmax]
+    if not selected:
+        return feats, targets, mask
+
+    # First construct features and the per-time distance table.  The official
+    # ``generate_map_briads`` chooses exactly the nearest valid polyline at each
+    # future step, then marks it if the distance is <3 m.  v57 instead marked
+    # every polyline that ever came within 3 m, which can create parallel-lane
+    # false positives.
+    time_poly_dist = np.full((T, len(selected)), np.inf, dtype=float)
+    for i, (d0, xy) in enumerate(selected):
         center = xy.mean(axis=0)
         seg = xy[-1] - xy[0]
         seg_len = float(np.linalg.norm(seg))
         seg_dir = seg / max(seg_len, 1e-6)
-        # BeTop's map topology marks map polylines occupied/crossed by the future
-        # trajectory.  We use min distance from candidate prefix to the polyline.
         dist = np.linalg.norm(ego_xy[:, None, :] - xy[None, :, :], axis=-1)
-        min_dist = float(np.min(dist)) if dist.size else 1e6
-        nearest = xy.reshape(-1, 2)[int(np.argmin(np.linalg.norm(xy - eT[None, :], axis=-1)))]
+        min_dist_t = np.min(dist, axis=1) if dist.size else np.full((T,), np.inf)
+        time_poly_dist[:, i] = min_dist_t
+        min_dist = float(np.min(min_dist_t)) if min_dist_t.size else 1e6
+        nearest = xy[int(np.argmin(np.linalg.norm(xy - eT[None, :], axis=-1)))]
         rel0 = center - e0
         relT = nearest - eT
         feats[i] = np.asarray([
@@ -510,8 +760,14 @@ def _map_topology_arrays(d: dict[str, Any], cfg: dict[str, Any]) -> tuple[np.nda
             d0 / 80.0, min_dist / 20.0, float(xy.shape[0]) / 100.0,
             float(np.std(xy[:, 0])) / 80.0, float(np.std(xy[:, 1])) / 80.0,
         ], dtype=np.float32)
-        targets[i] = float(min_dist < 3.0)
         mask[i] = bool(d0 < 100.0 or min_dist < 10.0)
+
+    if len(selected):
+        nearest_idx = np.argmin(time_poly_dist, axis=1)
+        nearest_dist = time_poly_dist[np.arange(T), nearest_idx]
+        for t in range(T):
+            if bool(ego_valid[t]) and np.isfinite(nearest_dist[t]) and nearest_dist[t] < 3.0:
+                targets[int(nearest_idx[t])] = 1.0
     return np.nan_to_num(feats), targets.astype(np.float32), mask
 
 
@@ -574,8 +830,13 @@ class ExternalGroupDataset(Dataset):
         self.arch = str(mcfg.get("arch", self.baseline)).lower()
         self.max_candidates = int(bcfg.get("max_candidates", max(len(g) for g in self.groups)))
         self.use_teacher_branch_context = use_teacher_branch_context(cfg)
-        self.need_history = self.arch in {"gameformer", "gameformer_lite", "gameformer_levelk", "plantf", "plan_tf", "plantf_adapter", "pluto", "pluto_adapter", "pdm_hybrid", "pdm_hybrid_adapter"}
-        self.need_topology = self.arch in {"betop", "betop_lite", "betopnet", "betopnet_lite", "plantf", "plan_tf", "plantf_adapter", "pluto", "pluto_adapter"}
+        self.need_history = self.arch in {"gameformer", "gameformer_lite", "gameformer_levelk", "plantf", "plan_tf", "plantf_adapter", "pluto", "pluto_adapter"}
+        self.need_prefix_traj = self.need_history or self.arch in {"route_bc_wayformer", "wayformer_bc", "wayformer_scene_bc"}
+        self.need_source_scene = self.arch in {"gameformer", "gameformer_lite", "gameformer_levelk", "plantf", "plan_tf", "plantf_adapter", "pluto", "pluto_adapter", "route_bc_wayformer", "wayformer_bc", "wayformer_scene_bc"}
+        # Source-ported GameFormer/PlanTF/PLUTO consume candidate-independent
+        # actor/map tensors. Candidate-specific BeTop topology construction is
+        # therefore no longer paid for by these safe baselines.
+        self.need_topology = self.arch in {"betop", "betop_lite", "betopnet", "betopnet_lite"}
 
         if self.use_teacher_branch_context:
             m0, rf0, _, _, _ = _branch_arrays(first, cfg)
@@ -595,7 +856,7 @@ class ExternalGroupDataset(Dataset):
         else:
             self.history_len = _cfg_int(cfg, ("external_baselines", "model", "history_len"), 0)
             self.neighbors_to_predict = _cfg_int(cfg, ("external_baselines", "model", "neighbors_to_predict"), 0)
-            self.future_len = _cfg_int(cfg, ("external_baselines", "model", "future_len"), 0)
+            self.future_len = _cfg_int(cfg, ("external_baselines", "model", "future_len"), 20 if self.need_prefix_traj else 0)
 
         if self.need_topology:
             at0, _, _ = _actor_topology_arrays(first, cfg)
@@ -610,6 +871,18 @@ class ExternalGroupDataset(Dataset):
             self.num_topology_map = _cfg_int(cfg, ("external_baselines", "model", "num_topology_map"), 0)
             self.map_topology_feature_dim = _cfg_int(cfg, ("external_baselines", "model", "map_topology_feature_dim"), MAP_TOPO_FEATURE_DIM)
         self.topology_feature_dim = self.actor_topology_feature_dim
+
+        if self.need_source_scene:
+            ss = _source_scene_arrays(first, cfg)
+            self.source_max_agents = int(ss[0].shape[0])
+            self.source_map_polygons = int(ss[3].shape[0])
+            self.source_map_points = int(ss[3].shape[1])
+            self.source_centerline_points = int(ss[8].shape[0])
+        else:
+            self.source_max_agents = _cfg_int(cfg, ("external_baselines", "model", "source_max_agents"), 0)
+            self.source_map_polygons = _cfg_int(cfg, ("external_baselines", "model", "source_map_polygons"), 0)
+            self.source_map_points = _cfg_int(cfg, ("external_baselines", "model", "source_map_points"), 0)
+            self.source_centerline_points = _cfg_int(cfg, ("external_baselines", "model", "source_centerline_points"), 0)
 
     def __len__(self) -> int:
         return len(self.groups)
@@ -641,6 +914,9 @@ class ExternalGroupDataset(Dataset):
                 "ego_history": np.zeros((self.max_candidates, self.history_len, GAMEFORMER_STATE_DIM), dtype=np.float32),
                 "neighbor_history": np.zeros((self.max_candidates, self.neighbors_to_predict, self.history_len, GAMEFORMER_STATE_DIM), dtype=np.float32),
                 "neighbor_valid": np.zeros((self.max_candidates, self.neighbors_to_predict, self.history_len), dtype=bool),
+            })
+        if self.need_prefix_traj:
+            out_arrays.update({
                 "prefix_traj": np.zeros((self.max_candidates, self.future_len, 2), dtype=np.float32),
                 "prefix_valid": np.zeros((self.max_candidates, self.future_len), dtype=bool),
             })
@@ -654,14 +930,32 @@ class ExternalGroupDataset(Dataset):
                 "map_topology_mask": np.zeros((self.max_candidates, self.num_topology_map), dtype=bool),
             })
 
+        if self.need_source_scene and samples:
+            sa, sav, sc, smp, smpv, smeta, smc, smask, scl = _source_scene_arrays(samples[0], self.cfg)
+            out_arrays.update({
+                "source_agent_history": sa,
+                "source_agent_valid": sav,
+                "source_current_state": sc,
+                "source_map_points": smp,
+                "source_map_point_valid": smpv,
+                "source_map_meta": smeta,
+                "source_map_center": smc,
+                "source_map_valid": smask,
+                "source_centerline": scl,
+            })
+
         feature_matrix = samples_to_feature_matrix(samples, self.cfg, shared_scene=True)
         if n:
             x[:n] = feature_matrix[:n]
             mask[:n] = True
 
         shared_history = _history_scene_arrays(samples[0], self.cfg) if self.need_history and samples else None
+        shared_topology = _topology_scene_context(samples[0], self.cfg) if self.need_topology and samples else None
+        shared_origin = np.zeros((2,), dtype=np.float32); shared_rot = np.eye(2, dtype=np.float32)
         if shared_history is not None:
             shared_eh, shared_nh, shared_nv, shared_origin, _shared_yaw, shared_rot = shared_history
+        elif self.need_prefix_traj and samples:
+            _hist, _valid, _ego, shared_origin, _yaw, shared_rot = _history_frame(samples[0])
 
         for i, d in enumerate(samples):
             utility[i] = _scalar(d, "utility", 0.0)
@@ -678,18 +972,17 @@ class ExternalGroupDataset(Dataset):
                 out_arrays["root_valid"][i] = rv
                 out_arrays["option_valid"][i] = ov
             if self.need_history:
-                # Candidates in one group share scene/time history.  Reuse the
-                # expensive LSTM input construction and only transform the
-                # candidate-specific prefix trajectory.
-                pt, pv = _prefix_traj_array(d, self.cfg, shared_origin, shared_rot)
+                # Candidates in one group share scene/time history.
                 out_arrays["ego_history"][i] = shared_eh
                 out_arrays["neighbor_history"][i] = shared_nh
                 out_arrays["neighbor_valid"][i] = shared_nv
+            if self.need_prefix_traj:
+                pt, pv = _prefix_traj_array(d, self.cfg, shared_origin, shared_rot)
                 out_arrays["prefix_traj"][i] = pt
                 out_arrays["prefix_valid"][i] = pv
             if self.need_topology:
-                af, at, am = _actor_topology_arrays(d, self.cfg)
-                mf, mt, mm = _map_topology_arrays(d, self.cfg)
+                af, at, am = _actor_topology_arrays(d, self.cfg, shared_topology)
+                mf, mt, mm = _map_topology_arrays(d, self.cfg, shared_topology)
                 out_arrays["actor_topology_features"][i] = af
                 out_arrays["actor_topology_target"][i] = at
                 out_arrays["actor_topology_mask"][i] = am

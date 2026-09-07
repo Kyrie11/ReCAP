@@ -21,12 +21,12 @@ from ocrap.evaluation.metrics import (
 )
 from ocrap.external_baselines.data import (
     group_sample_paths, load_external_sample, _branch_arrays, _topology_arrays,
-    _history_arrays, _history_scene_arrays, _prefix_traj_array,
+    _history_arrays, _history_scene_arrays, _history_frame, _prefix_traj_array, _source_scene_arrays, _topology_scene_context,
     _actor_topology_arrays, _map_topology_arrays, use_teacher_branch_context,
 )
 from ocrap.external_baselines.models import build_model_from_cfg
 from ocrap.external_baselines.runtime import configure_cuda_runtime, resolve_amp_dtype
-from ocrap.external_baselines.observed_risk import observed_risk_profile, observed_risk_profiles
+from ocrap.external_baselines.observed_risk import build_observed_risk_context, observed_risk_profile, observed_risk_profiles, observed_risk_profiles_and_context
 from ocrap.external_baselines.policies import ExternalSelection, select_external_policy
 from ocrap.models.data import samples_to_feature_matrix
 
@@ -97,8 +97,13 @@ def _predict_group(model: torch.nn.Module | None, samples: list[dict[str, Any]],
     bcfg = (cfg.get("external_baselines", {}) or {})
     mcfg = (bcfg.get("model", {}) or {})
     arch = str(mcfg.get("arch", bcfg.get("baseline", ""))).lower()
-    need_history = arch in {"gameformer", "gameformer_lite", "gameformer_levelk", "plantf", "plan_tf", "plantf_adapter", "pluto", "pluto_adapter", "pdm_hybrid", "pdm_hybrid_adapter"}
-    need_topology = arch in {"betop", "betop_lite", "betopnet", "betopnet_lite", "plantf", "plan_tf", "plantf_adapter", "pluto", "pluto_adapter"}
+    need_history = arch in {"gameformer", "gameformer_lite", "gameformer_levelk", "plantf", "plan_tf", "plantf_adapter", "pluto", "pluto_adapter"}
+    need_prefix_traj = need_history or arch in {"route_bc_wayformer", "wayformer_bc", "wayformer_scene_bc"}
+    implementation = str(mcfg.get("implementation", bcfg.get("implementation", ""))).lower()
+    need_source_scene = (arch in {"route_bc_wayformer", "wayformer_bc", "wayformer_scene_bc"}) or (implementation in {"source_port", "source_port_v54", "sourceported_v54"} and arch in {"gameformer", "gameformer_lite", "gameformer_levelk", "plantf", "plan_tf", "plantf_adapter", "pluto", "pluto_adapter"})
+    # Source ports consume candidate-independent actor/map tensors, not the old
+    # handcrafted candidate-specific PlanTF/PLUTO topology proxy.
+    need_topology = arch in {"betop", "betop_lite", "betopnet", "betopnet_lite"} or (not need_source_scene and arch in {"plantf", "plan_tf", "plantf_adapter", "pluto", "pluto_adapter"})
     use_branch_context = use_teacher_branch_context(cfg)
 
     max_candidates = int(bcfg.get("max_candidates", len(samples)))
@@ -156,10 +161,38 @@ def _predict_group(model: torch.nn.Module | None, samples: list[dict[str, Any]],
             "prefix_traj": torch.from_numpy(prefix_traj).to(device, non_blocking=True),
             "prefix_valid": torch.from_numpy(prefix_valid).to(device, non_blocking=True),
         })
+    elif need_prefix_traj:
+        _hist0, _valid0, _ego0, origin0, _yaw0, rot0 = _history_frame(samples[0])
+        pref0, _ = _prefix_traj_array(samples[0], cfg, origin0, rot0)
+        T = int(pref0.shape[0])
+        prefix_traj = np.zeros((1, max_candidates, T, 2), dtype=np.float32)
+        prefix_valid = np.zeros((1, max_candidates, T), dtype=bool)
+        for i, d in enumerate(samples[:n]):
+            pt, pv = _prefix_traj_array(d, cfg, origin0, rot0)
+            prefix_traj[0, i], prefix_valid[0, i] = pt, pv
+        kwargs.update({
+            "prefix_traj": torch.from_numpy(prefix_traj).to(device, non_blocking=True),
+            "prefix_valid": torch.from_numpy(prefix_valid).to(device, non_blocking=True),
+        })
+
+    if need_source_scene:
+        sa, sav, sc, smp, smpv, smeta, smc, smask, scl = _source_scene_arrays(samples[0], cfg)
+        kwargs.update({
+            "source_agent_history": torch.from_numpy(sa[None]).to(device, non_blocking=True),
+            "source_agent_valid": torch.from_numpy(sav[None]).to(device, non_blocking=True),
+            "source_current_state": torch.from_numpy(sc[None]).to(device, non_blocking=True),
+            "source_map_points": torch.from_numpy(smp[None]).to(device, non_blocking=True),
+            "source_map_point_valid": torch.from_numpy(smpv[None]).to(device, non_blocking=True),
+            "source_map_meta": torch.from_numpy(smeta[None]).to(device, non_blocking=True),
+            "source_map_center": torch.from_numpy(smc[None]).to(device, non_blocking=True),
+            "source_map_valid": torch.from_numpy(smask[None]).to(device, non_blocking=True),
+            "source_centerline": torch.from_numpy(scl[None]).to(device, non_blocking=True),
+        })
 
     if need_topology:
-        actor0, _, _ = _actor_topology_arrays(samples[0], cfg)
-        map0, _, _ = _map_topology_arrays(samples[0], cfg)
+        topology_scene = _topology_scene_context(samples[0], cfg)
+        actor0, _, _ = _actor_topology_arrays(samples[0], cfg, topology_scene)
+        map0, _, _ = _map_topology_arrays(samples[0], cfg, topology_scene)
         A_top, AF = int(actor0.shape[0]), int(actor0.shape[-1])
         M_top, MF = int(map0.shape[0]), int(map0.shape[-1])
         actor_topology_features = np.zeros((1, max_candidates, A_top, AF), dtype=np.float32)
@@ -167,8 +200,8 @@ def _predict_group(model: torch.nn.Module | None, samples: list[dict[str, Any]],
         map_topology_features = np.zeros((1, max_candidates, M_top, MF), dtype=np.float32)
         map_topology_mask = np.zeros((1, max_candidates, M_top), dtype=bool)
         for i, d in enumerate(samples[:n]):
-            af, _, am = _actor_topology_arrays(d, cfg)
-            mf, _, mm = _map_topology_arrays(d, cfg)
+            af, _, am = _actor_topology_arrays(d, cfg, topology_scene)
+            mf, _, mm = _map_topology_arrays(d, cfg, topology_scene)
             actor_topology_features[0, i], actor_topology_mask[0, i] = af, am
             map_topology_features[0, i], map_topology_mask[0, i] = mf, mm
         kwargs.update({
@@ -371,19 +404,36 @@ def evaluate_external_baselines(
         # conditioned risk profiles. Compute them once per candidate group rather
         # than once per method and once again for the selected record.
         oracle_names = {"oracle_filter", "oracle_recovery_filter", "branchwise_oracle_filter", "oracle_branchwise_recovery"}
-        learned_names = {"route_bc", "route_bc_lite", "waymax_bc", "waymax_bc_lite", "wayformer_bc", "wayformer_style_bc", "route_bc_wayformer", "gameformer", "gameformer_lite", "gameformer_levelk", "betop", "betop_lite", "betopnet", "betopnet_lite", "plantf", "plan_tf", "plantf_adapter", "pluto", "pluto_adapter", "pdm_hybrid", "pdm_hybrid_adapter"}
-        # PDM-Hybrid combines learned refinement logits with the same observation-
-        # only PDM risk scorer, so it still requires profiles at selection time.
-        profiled_learned = {"pdm_hybrid", "pdm_hybrid_adapter"}
-        pure_learned = learned_names - profiled_learned
-        need_profiles = any(m.lower() not in oracle_names | pure_learned for m in methods)
+        learned_names = {"route_bc", "route_bc_lite", "waymax_bc", "waymax_bc_lite", "wayformer_bc", "wayformer_style_bc", "route_bc_wayformer", "gameformer", "gameformer_lite", "gameformer_levelk", "betop", "betop_lite", "betopnet", "betopnet_lite", "plantf", "plan_tf", "plantf_adapter", "pluto", "pluto_adapter"}
+        pure_learned = learned_names
+        context_only_names = {
+            "dr_cvar_safety_filter", "distributionally_robust_cvar_filter", "safaoui_dr_cvar_filter",
+            "conformal_predictive_safety_filter", "conformal_safety_filter", "cpsf",
+        }
+        predictor_free_paper_names = {
+            "postimpact_mpc", "postimpact_mpc_lite", "post_impact_mpc_lite", "postimpact_mpc_paper", "integrated_postimpact_mpc",
+            "postimpact_motion_tvlqr", "postimpact_motion_planning", "wang2022_postimpact", "postimpact_tvlqr",
+        }
+        simple_names = oracle_names | pure_learned | predictor_free_paper_names
+        need_profiles = any(m.lower() not in simple_names | context_only_names for m in methods)
+        need_context = need_profiles or any(m.lower() in context_only_names for m in methods)
         tick = perf_counter()
-        profiles = observed_risk_profiles(samples, model_cfg) if need_profiles else None
+        if need_profiles:
+            profiles, risk_context = observed_risk_profiles_and_context(samples, model_cfg)
+        elif need_context:
+            profiles, risk_context = None, build_observed_risk_context(samples[0], model_cfg)
+        else:
+            profiles, risk_context = None, None
         timing["observed_risk_s"] += perf_counter() - tick
         for method in methods:
-            use_profiles = profiles if method.lower() not in oracle_names | pure_learned else None
+            ml = method.lower()
+            use_profiles = profiles if ml not in simple_names | context_only_names else None
+            use_context = risk_context if ml in context_only_names or (profiles is not None and ml not in simple_names) else None
             tick = perf_counter()
-            sel = select_external_policy(method, samples, model_cfg, model_outputs=model_outputs, precomputed_profiles=use_profiles)
+            sel = select_external_policy(
+                method, samples, model_cfg, model_outputs=model_outputs,
+                precomputed_profiles=use_profiles, precomputed_context=use_context,
+            )
             selection_s = perf_counter() - tick
             timing["selection_s_by_method"][method] += selection_s
             record = _record_for_selection(method, samples, sel, model_cfg, observed_profiles=profiles)
@@ -391,7 +441,7 @@ def evaluate_external_baselines(
             records_by_method[method].append(record)
         if gi == 1 or gi % 500 == 0:
             print({"event": "external_eval_progress", "groups_done": gi, "num_groups": len(groups)}, flush=True)
-    learned_methods = {"route_bc", "route_bc_lite", "waymax_bc", "waymax_bc_lite", "wayformer_bc", "wayformer_style_bc", "route_bc_wayformer", "gameformer", "gameformer_lite", "gameformer_levelk", "betop", "betop_lite", "betopnet", "betopnet_lite", "plantf", "plan_tf", "plantf_adapter", "pluto", "pluto_adapter", "pdm_hybrid", "pdm_hybrid_adapter"}
+    learned_methods = {"route_bc", "route_bc_lite", "waymax_bc", "waymax_bc_lite", "wayformer_bc", "wayformer_style_bc", "route_bc_wayformer", "gameformer", "gameformer_lite", "gameformer_levelk", "betop", "betop_lite", "betopnet", "betopnet_lite", "plantf", "plan_tf", "plantf_adapter", "pluto", "pluto_adapter"}
     oracle_methods = {"oracle_filter", "oracle_recovery_filter", "branchwise_oracle_filter", "oracle_branchwise_recovery"}
     summaries = {}
     for m in methods:

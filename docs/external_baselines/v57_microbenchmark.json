@@ -1,0 +1,45 @@
+{
+  "benchmark": "synthetic CPU selector, 24 executable candidates; same sample/config shape; not Waymax end-to-end",
+  "v56": {
+    "post_crash_braking": {
+      "median_ms": 7.910631999948237,
+      "p90_ms": 10.245817000054558
+    },
+    "post_collision_restoration": {
+      "median_ms": 11.768497000048228,
+      "p90_ms": 15.948997000009513
+    },
+    "compensatory_postimpact_mpc": {
+      "median_ms": 7.464118000029885,
+      "p90_ms": 8.033317000013085
+    },
+    "robust_postimpact_control": {
+      "median_ms": 7.496316000015213,
+      "p90_ms": 7.880147000037141
+    }
+  },
+  "v57": {
+    "post_crash_braking": {
+      "median_ms": 0.680747000046722,
+      "p90_ms": 1.2732330000062575
+    },
+    "post_collision_restoration": {
+      "median_ms": 0.6533770000487493,
+      "p90_ms": 0.6979739999906087
+    },
+    "compensatory_postimpact_mpc": {
+      "median_ms": 0.7269269999596872,
+      "p90_ms": 0.7748200000605721
+    },
+    "robust_postimpact_control": {
+      "median_ms": 3.674537000051714,
+      "p90_ms": 4.094430999998622
+    }
+  },
+  "speedup_median": {
+    "post_crash_braking": 11.620516872502272,
+    "post_collision_restoration": 18.011801760959088,
+    "compensatory_postimpact_mpc": 10.268043421751864,
+    "robust_postimpact_control": 2.0400708987036222
+  }
+}

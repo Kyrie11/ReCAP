@@ -6,19 +6,24 @@ external_baselines:
   allow_teacher_supervision: false
   model:
     arch: plantf
+    implementation: source_port_v54
     max_candidates: 24
-    d_model: 192
+    # Uploaded PlanTF model config: dim=128, depth=4, heads=8, modes=6,
+    # state_dropout=0.75. Its 8 s / 80-step target is truncated to OC-RAP's
+    # executable 2 s / 20-step prefix for an apples-to-apples action interface.
+    d_model: 128
     num_layers: 4
     num_heads: 8
-    dropout: 0.10
-    state_dropout: 0.25
+    dropout: 0.0
+    state_dropout: 0.75
+    num_modes: 6
     history_len: 11
-    neighbors_to_predict: 8
     future_len: 20
-    num_topology_agents: 16
-    actor_topology_feature_dim: 16
-    num_topology_map: 64
-    map_topology_feature_dim: 14
+    neighbors_to_predict: 15
+    source_max_agents: 16
+    source_map_polygons: 64
+    source_map_points: 20
+    projection_beta: 2.0
   training:
     sdpa_backend: safe
     amp_dtype: auto
@@ -27,18 +32,25 @@ external_baselines:
     batch_size: 64
     num_workers: 8
     epochs: 25
-    lr: 0.0002
+    lr: 0.001
     weight_decay: 0.0001
+    scheduler: warmup_cosine
+    warmup_epochs: 3
     grad_clip: 5.0
     tqdm: true
     pin_memory: true
+    persistent_workers: true
+    prefetch_factor: 2
+    fused_optimizer: true
     find_unused_parameters: false
   loss_weights:
-    policy: 1.0
+    policy: 0.25
     levelk: 0.0
     level_response: 0.0
     topology: 0.0
     gameformer_traj: 0.0
+    plantf_native: 1.0
+    pluto_native: 0.0
     pluto_contrastive: 0.0
     utility: 0.0
     hard: 0.0

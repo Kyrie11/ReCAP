@@ -1,0 +1,49 @@
+{
+  "benchmark_type": "synthetic_cpu_kernel_microbenchmark_not_waymax_wallclock",
+  "candidate_count": 24,
+  "severity_minimization": {
+    "v57_median_ms": 8.458268000140379,
+    "v58_median_ms": 5.943702500189829,
+    "speedup_x": 1.4230638225702312,
+    "v57_p90_ms": 9.199272100431699,
+    "v58_p90_ms": 6.533692500124744,
+    "note": "v58 adds source paper-core collision/post-impact computation yet accelerates via vectorized SAT screening and first-impact-only polygon clipping."
+  },
+  "compensatory_postimpact_mpc": {
+    "v57_median_ms": 0.7172374998845044,
+    "v58_median_ms": 0.7522605001213378,
+    "speedup_x": 0.9534429891890052,
+    "v57_p90_ms": 0.9769671006324643,
+    "v58_p90_ms": 1.0215640993919806,
+    "note": "No defensible new equations were added; small difference is benchmark noise. v57 predictor-free fast path retained."
+  },
+  "betop_topology_preprocess": {
+    "v57_uncached_median_ms": 161.0643210001399,
+    "v58_cached_median_ms": 138.58894449958825,
+    "speedup_x": 1.162172939419554,
+    "v57_p90_ms": 167.35892979968412,
+    "v58_p90_ms": 148.28855570049203,
+    "note": "candidate-independent actor/map sorting and scene context are cached once per group."
+  },
+  "wayformer_runtime_projection": {
+    "v58_runtime": {
+      "latents": 96,
+      "mode_decoder_layers": 2,
+      "median_ms": 10.289613000168174,
+      "p90_ms": 11.242644900084997,
+      "params_m": 4.215739,
+      "reps": 30
+    },
+    "paper_scale_operator_budget": {
+      "latents": 192,
+      "mode_decoder_layers": 8,
+      "median_ms": 28.831314999933966,
+      "p90_ms": 38.034654899456655,
+      "params_m": 10.560955,
+      "reps": 30
+    },
+    "runtime_vs_paperscale_speedup_x": 2.8019824457404514,
+    "parameter_reduction_fraction": 0.6008183918973237,
+    "note": "This is not a v57-to-v58 speedup. It quantifies the explicit v58 runtime projection (96 latent queries, 2 decoder layers) against the paper-scale operator budget (192, 8) under the same v58 implementation."
+  }
+}

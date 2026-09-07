@@ -13,6 +13,7 @@ external_baselines:
   max_candidates: 24
   policy:
     # Shared observation-only multi-modal forecast / risk representation.
+    risk_observation_conditioned_mode_weights: true  # explicit adapter; Safe/Contact retain legacy prior
     risk_dt: 0.1
     risk_clearance_buffer_m: 0.75
     risk_clearance_scale_m: 2.0
@@ -22,78 +23,98 @@ external_baselines:
     backup_deceleration_mps2: 5.0
     backup_reaction_time_s: 0.25
     cvar_alpha: 0.20
+    # Shared interface predictor only (not attributed to any baseline paper).
+    # Visible kinematics update the mode prior; all methods receive the same
+    # observation-conditioned probabilities and no future/teacher labels.
+    risk_belief_prior_blend: 0.30
+    risk_belief_distance_scale_m: 25.0
+    risk_belief_longitudinal_sigma_mps2: 2.0
+    risk_belief_lateral_sigma_mps2: 1.5
+    risk_belief_intent_transition_s: 1.5
+    mode_distinguish_threshold_m: 1.0
     branch_divergence_threshold_m: 1.0
     max_branch_fraction: 0.60
 
-    # MARC: semantic multi-policy contingency tree + risk-aware bi-level core.
+    # MARC: semantic policy families -> policy-conditioned scenario responses ->
+    # scene-level dynamic branch point -> CVaR-weighted trajectory tree.  LP/iLQR
+    # is replaced only by enumeration over the common executable lattice.
     marc_risk_tolerance: 0.35
     marc_utility_weight: 1.0
-    marc_common_prefix_weight: 0.35
-    marc_backup_margin_weight: 0.08
-    marc_expected_risk_weight: 2.0
+    marc_safety_risk_weight: 2.0
     marc_collision_probability_weight: 1.0
     marc_smoothness_weight: 0.15
     marc_deviation_weight: 0.10
     marc_risk_threshold: 1.0
-    marc_use_temporal_risk_for_admission: true
-    marc_shared_prefix_risk_weight: 0.45
     marc_chance_threshold: 0.50
 
-    # RACP: belief-weighted multi-modal contingent plan + probabilistic risk.
-    racp_risk_tolerance: 0.60
+    # RACP uploaded-source structure: shared plan + branch-weighted contingent
+    # plans. The released Frenet configuration uses a 2.0 s shared plan followed
+    # by a 1.0 s contingent plan.  Because OC-RAP exposes a shorter common
+    # executable horizon, preserve that 2:1 relative topology after horizon
+    # normalization: branch at 2/(2+1) of the common horizon.  This fraction is
+    # therefore an interface projection, not a claim of source-native timing.
+    racp_branch_fraction: 0.6666666667
+    racp_nonanticipative_state_threshold_m: 1.0
     racp_utility_weight: 1.0
-    racp_belief_branch_weight: 0.45
     racp_backup_margin_weight: 0.06
     racp_risk_weight: 2.5
     racp_collision_probability_weight: 1.0
     racp_smoothness_weight: 0.10
     racp_deviation_weight: 0.05
     racp_risk_threshold: 0.75
-    racp_shared_prefix_risk_weight: 0.55
     racp_chance_threshold: 0.50
 
     # Batkovic et al. robust scenario MPC: expected cost + robust satisfaction
-    # across multi-modal obstacle futures.
-    scenario_mpc_worst_risk_gate: 1.50
+    # across every obstacle mode, with input non-anticipativity until the modes
+    # become distinguishable. Mode-dependent recourse is enumerated afterwards.
     scenario_mpc_min_clearance_gate_m: -0.50
+    scenario_mpc_max_common_fraction: 1.0
+    scenario_mpc_pairwise_beam_size: 128  # pairwise Eq.(7f) candidate-tree search cap
+    scenario_mpc_state_tie_threshold_m: 1.0
+    scenario_mpc_control_tie_accel_tol_mps2: 0.75
+    scenario_mpc_control_tie_steer_tol_rad: 0.15
     scenario_mpc_utility_weight: 1.0
     scenario_mpc_expected_weight: 1.5
-    scenario_mpc_worst_weight: 2.5
+    # Robustness is enforced as a hard all-mode constraint, not an invented
+    # worst-risk penalty. Keep zero unless using it only as an ablation tie-break.
+    scenario_mpc_worst_weight: 0.0
     scenario_mpc_smoothness_weight: 0.12
     scenario_mpc_deviation_weight: 0.05
 
-    # Predictive safety filter: minimally invasive projection into a stage +
-    # terminal backup set.
-    psf_backup_margin_m: 0.0
+    # Wabersich/Zeilinger PSF: preserve the proposed input if horizon state/input
+    # constraints and the terminal safe set are feasible; otherwise make the
+    # smallest executable input correction. No CBF condition is added.
+    psf_stage_clearance_margin_m: 0.0
     psf_terminal_backup_margin_m: 0.0
-    psf_cbf_kappa: 0.50
-    psf_cbf_slack_m: 0.50
     psf_accel_gate: 6.0
     psf_steer_gate: 0.75
-    psf_deviation_weight: 2.0
-    psf_utility_weight: 0.35
-    psf_barrier_weight: 0.25
-    psf_risk_weight: 2.0
-    psf_smoothness_weight: 0.15
+    psf_safety_tiebreak_weight: 0.001
 
-    # Safaoui/Summers DR-CVaR safety filter. In the common candidate lattice,
-    # empirical CVaR is conservatively inflated by epsilon*L/alpha before the
-    # closest admitted executable candidate is selected.
-    dr_cvar_wasserstein_radius: 0.08
-    dr_cvar_loss_lipschitz: 1.0
-    dr_cvar_threshold: 1.20
-    dr_cvar_min_clearance_gate_m: -0.50
-    dr_cvar_deviation_weight: 2.0
-    dr_cvar_utility_weight: 0.30
-    dr_cvar_risk_weight: 2.5
+    # Safaoui & Summers DR-CVaR source port. These defaults mirror the released
+    # experiment_setup.py (dt=.2, horizon=10, N=20, delta=.1, alpha=.2,
+    # Wasserstein epsilon=.05, Q=2, QT=5, R=1).  The released CVXPY safe-
+    # halfspace program has an exact affine closed form for the source loss, so
+    # runtime does not need thousands of tiny conic solves.
+    dr_cvar_horizon_steps: 10
+    dr_cvar_num_samples: 20
+    dr_cvar_alpha: 0.20
+    dr_cvar_wasserstein_radius: 0.05
+    dr_cvar_loss_bound: 0.10
+    dr_cvar_mpc_Q: 2.0
+    dr_cvar_mpc_QT: 5.0
+    dr_cvar_mpc_R: 1.0
+    dr_cvar_steering_input_scale: 6.0   # OC-RAP steering-to-source-control interface scale
+    dr_cvar_halfspace_tolerance_m: 1.0e-6
 
-    # Split-conformal admission. This scalar is overwritten by the calibration
-    # script using calibration_near_contact only; test labels never fit it.
-    conformal_collision_probability_threshold: 0.25
-    conformal_min_clearance_m: 0.0
-    conformal_deviation_weight: 2.0
-    conformal_utility_weight: 0.25
-    conformal_risk_weight: 1.0
+    # Strawn/Ayanian/Lindemann CPSF. Calibration writes one C_h per prediction
+    # step from raw WOMD futures; the launcher injects the frozen list here.
+    # The paper uses H=7 and collision radius epsilon=.5 m.  The total failure
+    # probability delta and mission horizon T are recorded in the calibration
+    # artifact because finite-sample CP can otherwise produce C_h=+inf.
+    cpsf_prediction_horizon_steps: 7
+    cpsf_collision_margin_m: 0.5
+    cpsf_mission_horizon_steps: 40
+    conformal_prediction_intervals_m: null
 
     # Teacher-only diagnostic upper bound, only used when explicitly requested.
     gamma_H: 0.0
@@ -101,6 +122,29 @@ external_baselines:
     gamma_branch_rec: 0.0
     gamma_oracle_rec: 0.0
     oracle_utility_tiebreak: 0.001
+
+    # Parseh/Nybacka/Asplund legacy Near-contact control. The source method is
+    # invoked before an unavoidable impact and evaluates predicted post-impact
+    # severity, so these settings live here (not in the Contact main table).
+    severity_collision_dt: 0.1
+    severity_collision_horizon_steps: 20
+    severity_contact_mu: 0.4
+    severity_target_mass_kg: 2150.0
+    severity_ego_mass_kg: 2150.0
+    severity_target_izz_kgm2: 3075.0
+    severity_ego_izz_kgm2: 3075.0
+    severity_lf_m: 1.4
+    severity_lr_m: 1.45
+    severity_front_stiffness_factor: 22.0
+    severity_rear_stiffness_factor: 22.0
+    severity_road_mu: 0.76
+    severity_rolling_resistance: 0.013
+    severity_postimpact_dt: 0.02
+    severity_postimpact_steps: 100
+    severity_w1: 1.0
+    severity_w2: 1.0
+    severity_w3: 1.0
+    severity_w4: 1.0
   training:
     device: auto
     batch_size: 64

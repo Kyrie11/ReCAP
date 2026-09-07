@@ -36,30 +36,38 @@ CL_WOMD="$(v50_normalize_womd_spec "$CL_WOMD" "$WOMD_NUM_SHARDS")"
 : "${CL_PARTIAL_WRITE_EVERY_SCENES:=32}"
 : "${CL_PROGRESS_EVERY_STEPS:=10}"
 : "${SKIP_COMPLETE_METHODS:=true}"
-: "${DO_TRAIN:=true}"                 # permit training missing/invalid checkpoints
-: "${FORCE_RETRAIN_SAFE:=false}"      # explicit architecture/data retraining
+: "${DO_TRAIN:=true}"
+: "${FORCE_RETRAIN_SAFE:=false}"
 : "${DO_OFFLINE:=true}"
 : "${DO_CLOSED_LOOP:=true}"
+: "${RUN_NOMINAL_CONTROL:=true}"
+: "${RUN_LEGACY_SAFE:=false}"
 : "${CUDA_DEVICES:=0,1}"
-: "${OCRAP_SDPA_BACKEND:=safe}"  # safe keeps Flash/MEM-efficient/math and disables only cuDNN SDPA
-: "${OCRAP_AMP_DTYPE:=auto}"    # BF16 on supported GPUs, otherwise FP16
-: "${CHECKPOINT_ROOT:=$RUN}"
-: "${WAYFORMER_CHECKPOINT:=$CHECKPOINT_ROOT/wayformer_bc/best.pt}"
-: "${GAMEFORMER_SAFE_CHECKPOINT:=$CHECKPOINT_ROOT/gameformer_lite/best.pt}"
-: "${BETOPNET_CHECKPOINT:=$CHECKPOINT_ROOT/betopnet_lite/best.pt}"
+: "${MAX_PARALLEL:=2}"                    # two jobs at a time by default
+: "${USE_DYNAMIC_SCHEDULER:=auto}"
+: "${OCRAP_SDPA_BACKEND:=safe}"
+: "${OCRAP_AMP_DTYPE:=auto}"
+: "${CHECKPOINT_ROOT:=$RUN/checkpoints}"
+: "${TRAIN_NUM_WORKERS_PER_JOB:=0}"       # 0 = auto from host CPU count
 
 IFS=',' read -r -a GPU_LIST <<< "$CUDA_DEVICES"
 ((${#GPU_LIST[@]})) || GPU_LIST=(0 1)
-: "${MAX_PARALLEL:=${#GPU_LIST[@]}}"
+((MAX_PARALLEL >= 1)) || MAX_PARALLEL=1
+((MAX_PARALLEL <= 2)) || MAX_PARALLEL=2
 ((MAX_PARALLEL <= ${#GPU_LIST[@]})) || MAX_PARALLEL="${#GPU_LIST[@]}"
 CPU_COUNT="$(getconf _NPROCESSORS_ONLN 2>/dev/null || nproc 2>/dev/null || echo 8)"
-: "${THREADS_PER_JOB:=$(( CPU_COUNT / MAX_PARALLEL ))}"
+: "${THREADS_PER_JOB:=$(( CPU_COUNT / (2 * MAX_PARALLEL) ))}"
 ((THREADS_PER_JOB >= 1)) || THREADS_PER_JOB=1
 ((THREADS_PER_JOB <= 8)) || THREADS_PER_JOB=8
+if ((TRAIN_NUM_WORKERS_PER_JOB <= 0)); then
+  TRAIN_NUM_WORKERS_PER_JOB=$(( CPU_COUNT / (2 * MAX_PARALLEL) ))
+  ((TRAIN_NUM_WORKERS_PER_JOB >= 2)) || TRAIN_NUM_WORKERS_PER_JOB=2
+  ((TRAIN_NUM_WORKERS_PER_JOB <= 8)) || TRAIN_NUM_WORKERS_PER_JOB=8
+fi
 : "${JAX_CACHE_DIR:=$RUN/.jax_compilation_cache}"
 : "${XLA_PYTHON_CLIENT_PREALLOCATE:=false}"
 export RUN CL_WOMD
-mkdir -p "$RUN" "$JAX_CACHE_DIR"
+mkdir -p "$RUN" "$CHECKPOINT_ROOT" "$JAX_CACHE_DIR"
 
 if v50_bool_true "$DO_CLOSED_LOOP" && v50_bool_true "$CL_PREFLIGHT"; then
   preflight_target_args=()
@@ -72,90 +80,157 @@ if v50_bool_true "$DO_CLOSED_LOOP" && v50_bool_true "$CL_PREFLIGHT"; then
     --output "$RUN/closed_loop_dataset_support.json"
 fi
 
-# method|config|checkpoint
+# method|config|kind|checkpoint
+# These are the six main-table Safe methods declared in provenance.py.
 SPECS=(
-  "wayformer_bc|configs/external_baselines/wayformer_bc.yaml|$WAYFORMER_CHECKPOINT"
-  "gameformer_lite|configs/external_baselines/gameformer_lite.yaml|$GAMEFORMER_SAFE_CHECKPOINT"
-  "betopnet_lite|configs/external_baselines/betopnet_lite.yaml|$BETOPNET_CHECKPOINT"
+  "gameformer_lite|configs/external_baselines/gameformer_lite.yaml|learned|$CHECKPOINT_ROOT/gameformer_lite/best.pt|source_port_v54"
+  "plantf|configs/external_baselines/plantf.yaml|learned|$CHECKPOINT_ROOT/plantf/best.pt|source_port_v54"
+  "pluto|configs/external_baselines/pluto.yaml|learned|$CHECKPOINT_ROOT/pluto/best.pt|source_port_v54"
+  "pdm_closed|configs/external_baselines/pdm_closed.yaml|nonlearning||"
+  "pdm_hybrid|configs/external_baselines/pdm_hybrid.yaml|nonlearning||"
+  "idm|configs/external_baselines/idm.yaml|nonlearning||"
 )
-CLOSED_LOOP_SPECS=(
-  "nominal_replay|configs/external_baselines/nominal_log_replay.yaml|"
-  "${SPECS[@]}"
-)
+# Wayformer and BeTop are architecture/topology controls rather than Safe
+# main-table planners.  They are opt-in so the historical command remains
+# unchanged, while RUN_LEGACY_SAFE=true trains/evaluates them through the same
+# dataset and complete Safe metric contract.
+if v50_bool_true "$RUN_LEGACY_SAFE"; then
+  SPECS+=(
+    "wayformer_bc|configs/external_baselines/wayformer_bc.yaml|learned|$CHECKPOINT_ROOT/wayformer_bc/best.pt|architecture_port_v58"
+    "betopnet_lite|configs/external_baselines/betopnet_lite.yaml|learned|$CHECKPOINT_ROOT/betopnet_lite/best.pt|source_backed_topology_adapter_v58"
+  )
+fi
 
-run_env() {
+run_env_gpu() {
   local gpu="$1"; shift
-  local gpu_cache="$JAX_CACHE_DIR/gpu_${gpu//[^[:alnum:]_.-]/_}"
-  mkdir -p "$gpu_cache"
+  local cache="$JAX_CACHE_DIR/gpu_${gpu//[^[:alnum:]_.-]/_}"
+  mkdir -p "$cache"
   env CUDA_VISIBLE_DEVICES="$gpu" \
     OMP_NUM_THREADS="$THREADS_PER_JOB" MKL_NUM_THREADS="$THREADS_PER_JOB" \
     OPENBLAS_NUM_THREADS="$THREADS_PER_JOB" NUMEXPR_NUM_THREADS="$THREADS_PER_JOB" \
     TF_NUM_INTRAOP_THREADS="$THREADS_PER_JOB" TF_NUM_INTEROP_THREADS=2 MALLOC_ARENA_MAX=4 \
     XLA_PYTHON_CLIENT_PREALLOCATE="$XLA_PYTHON_CLIENT_PREALLOCATE" \
     TF_FORCE_GPU_ALLOW_GROWTH=true JAX_ENABLE_X64=0 \
-    JAX_COMPILATION_CACHE_DIR="$gpu_cache" JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS=0 \
+    JAX_COMPILATION_CACHE_DIR="$cache" JAX_PERSISTENT_CACHE_MIN_COMPILE_TIME_SECS=0 \
     PYTHONUNBUFFERED=1 "$@"
 }
 
 checkpoint_valid() {
-  local ckpt="$1"
-  [[ -f "$ckpt" ]] && python tools/validate_external_checkpoint.py \
-    --checkpoint "$ckpt" --require-deployable-contract >/dev/null 2>&1
+  local ckpt="$1" expected_impl="${2:-source_port_v54}"
+  [[ -n "$ckpt" && -f "$ckpt" ]] && python tools/validate_external_checkpoint.py \
+    --checkpoint "$ckpt" --require-deployable-contract \
+    --require-implementation-version "$expected_impl" >/dev/null 2>&1
 }
 
-run_batches() {
-  local runner="$1"; shift
-  local items=("$@") base j idx failed
-  for ((base=0; base<${#items[@]}; base+=MAX_PARALLEL)); do
-    local pids=() names=(); failed=0
-    for ((j=0; j<MAX_PARALLEL && base+j<${#items[@]}; j++)); do
-      idx=$((base+j)); "$runner" "${items[$idx]}" "$idx" &
-      pids+=("$!"); names+=("${items[$idx]%%|*}")
-    done
-    for j in "${!pids[@]}"; do
-      if ! wait "${pids[$j]}"; then echo "[ERROR] ${names[$j]} failed" >&2; failed=1; fi
-    done
-    [[ "$failed" -eq 0 ]] || return 1
-  done
-}
+# Validate/register the three rule/optimization baselines with ONE train/val scan.
+# No .pt file is expected for these methods.
+if v50_bool_true "$DO_TRAIN"; then
+  python -u tools/register_external_nonlearning_baselines.py \
+    --dataset "$TRAIN_SAFE" --val-dataset "$VAL_SAFE" \
+    --specs "pdm_closed=configs/external_baselines/pdm_closed.yaml,pdm_hybrid=configs/external_baselines/pdm_hybrid.yaml,idm=configs/external_baselines/idm.yaml" \
+    --output-root "$CHECKPOINT_ROOT" \
+    2>&1 | tee "$RUN/register_nonlearning_safe.log"
+fi
 
-run_train_eval_job() {
-  local spec="$1" idx="$2" method config ckpt gpu train_dir
-  IFS='|' read -r method config ckpt <<< "$spec"
-  gpu="${GPU_LIST[$((idx % ${#GPU_LIST[@]}))]}"
-  train_dir="$(dirname "$ckpt")"
-  if ! v50_bool_true "$DO_OFFLINE" && v50_bool_true "$DO_CLOSED_LOOP" && v50_bool_true "$SKIP_COMPLETE_METHODS" \
-      && python tools/check_closed_loop_artifact.py --output "$RUN/closed_loop_${method}.json" --quiet; then
-    echo "[REUSE] safe method=$method already has a complete closed-loop artifact; checkpoint preparation skipped"
-    return 0
-  fi
-  echo "[START] safe train/eval baseline=$method gpu=$gpu checkpoint=$ckpt"
-  if v50_bool_true "$FORCE_RETRAIN_SAFE" || ! checkpoint_valid "$ckpt"; then
-    if ! v50_bool_true "$DO_TRAIN"; then
-      echo "Missing/invalid checkpoint and training disabled: $ckpt" >&2; return 2
+prepare_or_offline_method() {
+  local spec="$1" gpu="$2" method config kind ckpt expected_impl train_dir
+  IFS='|' read -r method config kind ckpt expected_impl <<< "$spec"
+  expected_impl="${expected_impl:-source_port_v54}"
+  if [[ "$kind" == learned ]]; then
+    if ! v50_bool_true "$DO_OFFLINE" && v50_bool_true "$DO_CLOSED_LOOP" && v50_bool_true "$SKIP_COMPLETE_METHODS" \
+        && python tools/check_closed_loop_artifact.py --output "$RUN/closed_loop_${method}.json" --quiet; then
+      echo "[REUSE] safe method=$method already has a complete closed-loop artifact; checkpoint preparation skipped"
+      return 0
     fi
-    mkdir -p "$train_dir"
-    run_env "$gpu" python -u -m ocrap.cli train-baseline \
-      --config "$config" --dataset "$TRAIN_SAFE" --val-dataset "$VAL_SAFE" \
-      --baseline "$method" --output "$train_dir" \
-      --set external_baselines.training.tqdm=false \
-      --set "external_baselines.training.sdpa_backend=$OCRAP_SDPA_BACKEND" \
-      --set "external_baselines.training.amp_dtype=$OCRAP_AMP_DTYPE" \
-      2>&1 | tee "$RUN/train_${method}.log"
-    checkpoint_valid "$ckpt" || { echo "Training produced an invalid checkpoint: $ckpt" >&2; return 2; }
-  else
-    echo "[REUSE] validated checkpoint $ckpt"
+    if v50_bool_true "$FORCE_RETRAIN_SAFE" || ! checkpoint_valid "$ckpt" "$expected_impl"; then
+      if ! v50_bool_true "$DO_TRAIN"; then
+        echo "Missing/invalid checkpoint and training disabled: $ckpt" >&2
+        return 2
+      fi
+      train_dir="$(dirname "$ckpt")"; mkdir -p "$train_dir"
+      echo "[TRAIN] safe method=$method gpu=$gpu"
+      run_env_gpu "$gpu" python -u -m ocrap.cli train-baseline \
+        --config "$config" --dataset "$TRAIN_SAFE" --val-dataset "$VAL_SAFE" \
+        --baseline "$method" --output "$train_dir" \
+        --set external_baselines.training.distributed=false \
+        --set "external_baselines.training.num_workers=$TRAIN_NUM_WORKERS_PER_JOB" \
+        --set external_baselines.training.tqdm=false \
+        --set "external_baselines.training.sdpa_backend=$OCRAP_SDPA_BACKEND" \
+        --set "external_baselines.training.amp_dtype=$OCRAP_AMP_DTYPE" \
+        2>&1 | tee "$RUN/train_${method}.log"
+      checkpoint_valid "$ckpt" "$expected_impl" || { echo "Training produced an invalid checkpoint: $ckpt" >&2; return 2; }
+    else
+      echo "[REUSE] validated checkpoint $ckpt"
+    fi
   fi
+
   if v50_bool_true "$DO_OFFLINE"; then
-    run_env "$gpu" python -u -m ocrap.cli evaluate-baseline \
-      --config "$config" --dataset "$TEST_SAFE" --checkpoint "$ckpt" \
+    local checkpoint_args=()
+    [[ "$kind" == learned ]] && checkpoint_args=(--checkpoint "$ckpt")
+    echo "[OFFLINE] safe method=$method gpu=$gpu"
+    run_env_gpu "$gpu" python -u -m ocrap.cli evaluate-baseline \
+      --config "$config" --dataset "$TEST_SAFE" "${checkpoint_args[@]}" \
       --split test --output "$RUN/eval_safe_${method}.json" --baselines "$method" \
       2>&1 | tee "$RUN/eval_safe_${method}.log"
   fi
-  echo "[DONE] safe train/eval baseline=$method gpu=$gpu"
 }
 
-if v50_bool_true "$DO_OFFLINE"; then
+supports_wait_pid_capture() {
+  help wait 2>/dev/null | grep -Eq -- '(^|[[:space:]])-p([[:space:]]|[[:punct:]])'
+}
+
+run_queue_dynamic() {
+  local runner="$1"; shift; local -a items=("$@")
+  local next=0 active=0 failed=0 done_pid status gpu item i
+  declare -A PID_GPU=() PID_ITEM=()
+  launch_one() {
+    local x="$1" g="$2"
+    "$runner" "$x" "$g" & local p=$!
+    PID_GPU[$p]="$g"; PID_ITEM[$p]="$x"; active=$((active+1))
+  }
+  for ((i=0; i<MAX_PARALLEL && next<${#items[@]}; i++)); do
+    launch_one "${items[$next]}" "${GPU_LIST[$i]}"; next=$((next+1))
+  done
+  while ((active>0)); do
+    done_pid=""; if wait -n -p done_pid; then status=0; else status=$?; fi
+    gpu="${PID_GPU[$done_pid]}"; item="${PID_ITEM[$done_pid]}"
+    unset 'PID_GPU[$done_pid]' 'PID_ITEM[$done_pid]'; active=$((active-1))
+    if ((status!=0)); then echo "[ERROR] ${item%%|*} failed on GPU $gpu (status=$status)" >&2; failed=1; fi
+    if ((next<${#items[@]})); then launch_one "${items[$next]}" "$gpu"; next=$((next+1)); fi
+  done
+  return "$failed"
+}
+
+run_queue_fixed() {
+  local runner="$1"; shift; local -a items=("$@")
+  local base j idx failed=0; local -a pids=() names=()
+  for ((base=0; base<${#items[@]}; base+=MAX_PARALLEL)); do
+    pids=(); names=()
+    for ((j=0; j<MAX_PARALLEL && base+j<${#items[@]}; j++)); do
+      idx=$((base+j)); "$runner" "${items[$idx]}" "${GPU_LIST[$j]}" &
+      pids+=("$!"); names+=("${items[$idx]%%|*}")
+    done
+    for j in "${!pids[@]}"; do wait "${pids[$j]}" || { echo "[ERROR] ${names[$j]} failed" >&2; failed=1; }; done
+  done
+  return "$failed"
+}
+
+run_queue() {
+  local runner="$1"; shift; local use_dynamic=false
+  case "${USE_DYNAMIC_SCHEDULER,,}" in
+    1|true|yes|on) supports_wait_pid_capture || { echo "USE_DYNAMIC_SCHEDULER requested but Bash lacks wait -p" >&2; return 2; }; use_dynamic=true ;;
+    auto|'') supports_wait_pid_capture && use_dynamic=true ;;
+    0|false|no|off) use_dynamic=false ;;
+    *) echo "Invalid USE_DYNAMIC_SCHEDULER=$USE_DYNAMIC_SCHEDULER" >&2; return 2 ;;
+  esac
+  if [[ "$use_dynamic" == true ]]; then run_queue_dynamic "$runner" "$@"; else run_queue_fixed "$runner" "$@"; fi
+}
+
+if v50_bool_true "$DO_TRAIN" || v50_bool_true "$DO_OFFLINE" || v50_bool_true "$DO_CLOSED_LOOP"; then
+  run_queue prepare_or_offline_method "${SPECS[@]}"
+fi
+
+if v50_bool_true "$DO_OFFLINE" && v50_bool_true "$RUN_NOMINAL_CONTROL"; then
   env CUDA_VISIBLE_DEVICES='' PYTHONUNBUFFERED=1 python -u -m ocrap.cli evaluate-baseline \
     --config configs/external_baselines/nominal_log_replay.yaml \
     --dataset "$TEST_SAFE" --split test \
@@ -164,35 +239,28 @@ if v50_bool_true "$DO_OFFLINE"; then
     2>&1 | tee "$RUN/eval_safe_nominal_log_replay.log"
 fi
 
-if v50_bool_true "$DO_TRAIN" || v50_bool_true "$DO_OFFLINE" || v50_bool_true "$DO_CLOSED_LOOP"; then
-  run_batches run_train_eval_job "${SPECS[@]}"
-fi
-
 run_closed_loop_method() {
-  local spec="$1" idx="$2" method runtime_method config ckpt gpu
-  IFS='|' read -r method config ckpt <<< "$spec"
-  # ``nominal_replay`` is the reporting alias used in tables. The core
-  # evaluator's deployable closed-loop method is named ``nominal``.
+  local spec="$1" gpu="$2" method config kind ckpt expected_impl runtime_method
+  IFS='|' read -r method config kind ckpt expected_impl <<< "$spec"
+  expected_impl="${expected_impl:-source_port_v54}"
   runtime_method="$method"
   [[ "$method" == nominal_replay ]] && runtime_method=nominal
-  gpu="${GPU_LIST[$((idx % ${#GPU_LIST[@]}))]}"
   local output="$RUN/closed_loop_${method}.json"
   if v50_bool_true "$SKIP_COMPLETE_METHODS" && python tools/check_closed_loop_artifact.py --output "$output" --quiet; then
     echo "[REUSE] safe closed-loop method=$method is already complete: $output"
     return 0
   fi
   local checkpoint_args=() target_args=()
-  if [[ "$method" != nominal_replay ]]; then
-    checkpoint_valid "$ckpt" || { echo "Missing/invalid checkpoint: $ckpt" >&2; return 2; }
+  if [[ "$kind" == learned ]]; then
+    checkpoint_valid "$ckpt" "$expected_impl" || { echo "Missing/invalid checkpoint: $ckpt" >&2; return 2; }
     checkpoint_args=(--checkpoint "$ckpt")
   fi
   if [[ -n "$CL_TARGET_KEYS_FILE" ]]; then
     target_args=(--set "closed_loop.target_keys_file=$CL_TARGET_KEYS_FILE" --set closed_loop.require_target_keys=true)
   fi
   echo "[START] safe closed-loop method=$method gpu=$gpu"
-  run_env "$gpu" python -u -m ocrap.cli closed-loop \
-    --config "$config" --dataset "$CL_WOMD" "${checkpoint_args[@]}" \
-    --output "$output" \
+  run_env_gpu "$gpu" python -u -m ocrap.cli closed-loop \
+    --config "$config" --dataset "$CL_WOMD" "${checkpoint_args[@]}" --output "$output" \
     --set "closed_loop.method=$runtime_method" \
     --set "closed_loop.max_scenarios=$CL_MAX_SCENARIOS" \
     --set "closed_loop.max_bucket_targets=$CL_MAX_SCENARIOS" \
@@ -228,23 +296,36 @@ run_closed_loop_method() {
 }
 
 if v50_bool_true "$DO_CLOSED_LOOP"; then
-  run_batches run_closed_loop_method "${CLOSED_LOOP_SPECS[@]}"
+  CLOSED_LOOP_SPECS=("${SPECS[@]}")
+  if v50_bool_true "$RUN_NOMINAL_CONTROL"; then
+    CLOSED_LOOP_SPECS+=("nominal_replay|configs/external_baselines/nominal_log_replay.yaml|nonlearning|")
+  fi
+  run_queue run_closed_loop_method "${CLOSED_LOOP_SPECS[@]}"
 fi
+
+SUMMARY_METHODS=()
+for spec in "${SPECS[@]}"; do
+  IFS='|' read -r _method _config _kind _ckpt _impl <<< "$spec"
+  SUMMARY_METHODS+=("$_method")
+done
+if v50_bool_true "$RUN_NOMINAL_CONTROL"; then SUMMARY_METHODS+=(nominal_replay); fi
+SUMMARY_METHODS_CSV="$(IFS=,; echo "${SUMMARY_METHODS[*]}")"
+python tools/summarize_external_closed_loop.py \
+  --run "$RUN" --regime safe --output "$RUN/closed_loop_summary.json" \
+  --methods "$SUMMARY_METHODS_CSV" --womd-spec "$CL_WOMD"
 
 python - <<'PY'
 import glob, json, os
-run=os.environ['RUN']
-offline=[]; closed=[]
+run=os.environ['RUN']; offline=[]
 for p in sorted(glob.glob(os.path.join(run,'eval_safe_*.json'))):
     try: d=json.load(open(p))
     except Exception: continue
     for method, values in (d.get('methods') or {}).items(): offline.append({'method':method, **values})
-for p in sorted(glob.glob(os.path.join(run,'closed_loop_*.json'))):
-    if p.endswith(('.progress.json','.partial')): continue
-    try: d=json.load(open(p))
-    except Exception: continue
-    closed.append({k:d.get(k) for k in ['method','source','label_mode','num_scenes','num_decisions','collision_scene_rate','offroad_scene_rate','closed_loop_bounded_NUP','intervention_rate','timing']})
+try:
+    closed_doc=json.load(open(os.path.join(run,'closed_loop_summary.json')))
+except Exception:
+    closed_doc={'methods':[], 'missing_methods':[]}
 out=os.path.join(run,'safe_external_baselines_summary.json')
-json.dump({'offline':offline,'closed_loop':closed,'womd_spec':os.environ.get('CL_WOMD')}, open(out,'w'), indent=2)
-print({'event':'safe_external_baselines_summary','output':out,'offline_methods':len(offline),'closed_loop_methods':len(closed)})
+json.dump({'offline':offline,'closed_loop':closed_doc.get('methods',[]),'missing_methods':closed_doc.get('missing_methods',[]),'womd_spec':os.environ.get('CL_WOMD')}, open(out,'w'), indent=2)
+print({'event':'safe_external_baselines_summary','output':out,'offline_methods':len(offline),'closed_loop_methods':len(closed_doc.get('methods',[]))})
 PY

@@ -22,7 +22,7 @@ def _load(path: Path) -> dict[str, Any]:
     return obj
 
 
-def _validate(path: Path, *, require_contract: bool) -> dict[str, Any]:
+def _validate(path: Path, *, require_contract: bool, require_implementation_version: str | None = None) -> dict[str, Any]:
     ckpt = _load(path)
     missing_keys = [key for key in ("cfg", "input_dim", "max_candidates", "model_state") if key not in ckpt]
     if missing_keys:
@@ -48,6 +48,11 @@ def _validate(path: Path, *, require_contract: bool) -> dict[str, Any]:
             raise ValueError(f"input_contract.version must be >=2, got {contract.get('version')!r}")
         if contract.get("deployable_feature_only") is not True:
             raise ValueError("checkpoint is teacher-conditioned; deployable_feature_only is not true")
+    implementation_version = str(ckpt.get("implementation_version", (((ckpt.get("cfg") or {}).get("external_baselines", {}) or {}).get("model", {}) or {}).get("implementation", "legacy_adapter")))
+    if require_implementation_version is not None and implementation_version != str(require_implementation_version):
+        raise ValueError(
+            f"implementation_version mismatch: expected {require_implementation_version!r}, got {implementation_version!r}"
+        )
     return {
         "checkpoint": str(path),
         "baseline": ckpt.get("baseline"),
@@ -57,6 +62,7 @@ def _validate(path: Path, *, require_contract: bool) -> dict[str, Any]:
         "global_batch_size": int(ckpt.get("global_batch_size", 0)),
         "input_contract_version": int(contract.get("version", 0)),
         "deployable_feature_only": contract.get("deployable_feature_only"),
+        "implementation_version": implementation_version,
         "num_model_tensors": len(state),
     }
 
@@ -79,6 +85,7 @@ def main() -> int:
     parser.add_argument("--checkpoint", required=True)
     parser.add_argument("--promote-from", default=None, help="Validate and atomically copy this checkpoint when --checkpoint is missing.")
     parser.add_argument("--require-deployable-contract", action="store_true")
+    parser.add_argument("--require-implementation-version", default=None)
     parser.add_argument("--allow-promotion", action="store_true", help="Explicitly permit --promote-from to become the requested checkpoint.")
     args = parser.parse_args()
 
@@ -93,7 +100,7 @@ def main() -> int:
                 f"missing checkpoint: {dst}; fallback exists at {src}, but promotion was not explicitly enabled"
             )
         try:
-            source_info = _validate(src, require_contract=bool(args.require_deployable_contract))
+            source_info = _validate(src, require_contract=bool(args.require_deployable_contract), require_implementation_version=args.require_implementation_version)
         except Exception as exc:
             raise SystemExit(f"invalid fallback checkpoint {src}: {exc}") from None
         _atomic_copy(src, dst)
@@ -101,7 +108,7 @@ def main() -> int:
         print(json.dumps({"event": "checkpoint_promoted", "source": str(src), "target": str(dst), **source_info}, sort_keys=True))
 
     try:
-        info = _validate(dst, require_contract=bool(args.require_deployable_contract))
+        info = _validate(dst, require_contract=bool(args.require_deployable_contract), require_implementation_version=args.require_implementation_version)
     except Exception as exc:
         raise SystemExit(f"invalid checkpoint {dst}: {exc}") from None
     print(json.dumps({"event": "checkpoint_valid", "promoted": promoted, **info}, sort_keys=True))

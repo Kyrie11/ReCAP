@@ -3,6 +3,8 @@ external_baselines:
   methods: [pdm_closed]
   max_candidates: 24
   policy:
+    # Observation-only risk geometry used to project PDMScorer's binary safety
+    # terms onto the common WOMD executable lattice; no OC-RAP recovery labels.
     risk_dt: 0.1
     risk_clearance_buffer_m: 0.75
     risk_clearance_scale_m: 2.0
@@ -10,14 +12,17 @@ external_baselines:
     risk_severity_speed_mps: 12.0
     backup_deceleration_mps2: 5.0
     backup_reaction_time_s: 0.25
-    cvar_alpha: 0.20
     pdm_progress_weight: 5.0
     pdm_ttc_weight: 5.0
     pdm_comfort_weight: 2.0
-    pdm_deviation_weight: 0.20
-    pdm_backup_margin_weight: 0.10
-    pdm_collision_probability_gate: 0.45
-    pdm_min_clearance_gate_m: -0.25
+    pdm_progress_distance_threshold_m: 0.1
+    pdm_collision_probability_gate: 0.05
+    pdm_min_clearance_gate_m: 0.0
+    pdm_route_half_width_m: 4.0
+    pdm_direction_backtrack_threshold_m: 2.0
+    pdm_comfort_jerk_threshold_mps3: 8.0
+    pdm_comfort_yaw_rate_threshold_rps: 0.8
+    pdm_comfort_steer_rate_threshold_rps: 1.2
   training:
     validate_dataset: true
     device: cpu

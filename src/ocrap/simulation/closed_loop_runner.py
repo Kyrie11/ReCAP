@@ -64,7 +64,6 @@ EXTERNAL_LEARNED_METHODS = {
     "betop", "betop_lite", "betopnet", "betopnet_lite",
     "plantf", "plan_tf", "plantf_adapter",
     "pluto", "pluto_adapter",
-    "pdm_hybrid", "pdm_hybrid_adapter",
 }
 
 
@@ -902,6 +901,15 @@ def _select_prefix(
 
     method_l = str(method).lower()
     if method_l in EXTERNAL_CLOSED_LOOP_METHODS:
+        # Post-impact source controllers use absolute time since the first
+        # post-contact decision (e.g. Ghosh 2026 open-loop steering/force
+        # pulses and Lu/Ford braking termination).  Keep this runtime-only
+        # observable outside stored dataset tensors to avoid any label leak.
+        sel_cfg = cfg.get("selection", {}) if isinstance(cfg.get("selection", {}), dict) else {}
+        elapsed = sel_cfg.get("runtime_contact_elapsed_s", None)
+        if elapsed is not None:
+            for d in dicts:
+                d["runtime_contact_elapsed_s"] = np.asarray(float(elapsed), dtype=np.float32)
         ext_cfg = external_model_cfg if isinstance(external_model_cfg, dict) else cfg
         ext_outputs = _predict_external_group(external_model, dicts, ext_cfg, external_device) if external_model is not None else {}
         selected_ext = select_external_policy(method_l, dicts, ext_cfg, model_outputs=ext_outputs)
@@ -1365,6 +1373,17 @@ def _rollout_one_scene(
         if not samples:
             break
         select_cfg = cfg
+        if method != "ocrap":
+            # Runtime-only post-contact clock for source controllers whose
+            # published law is parameterised in seconds after impact.  The
+            # dataset itself is unchanged and the same command line remains
+            # valid for all external baselines.
+            select_cfg = dict(cfg)
+            sel_local = dict(select_cfg.get("selection", {}) or {}) if isinstance(select_cfg.get("selection", {}), dict) else {}
+            contact_policy = (cfg.get("external_baselines", {}) or {}).get("policy", {}) if isinstance(cfg.get("external_baselines", {}), dict) else {}
+            contact_dt = float(contact_policy.get("contact_dt", 0.1)) if isinstance(contact_policy, dict) else 0.1
+            sel_local["runtime_contact_elapsed_s"] = float(step_idx) * contact_dt
+            select_cfg["selection"] = sel_local
         if method == "ocrap":
             # Give the selector the active regime/bucket and the running
             # intervention count.  This is intentionally not written back into

@@ -4,34 +4,48 @@ external_baselines:
   max_candidates: 24
   supervision_target: logged_nominal
   allow_teacher_supervision: false
+  implementation: architecture_port_v58
   model:
-    arch: route_bc_wayformer
+    # Wayformer is a motion-forecasting architecture, not a native planner.
+    # v58 keeps early scene fusion + latent-query encoding + a multimodal GMM
+    # decoder, then projects that ego-future distribution onto OC-RAP's common
+    # executable candidate lattice.
+    arch: wayformer_scene_bc
     max_candidates: 24
     d_model: 256
-    num_layers: 4
-    num_heads: 8
-    dropout: 0.15
-    num_latents: 16
+    num_layers: 0                 # no extra candidate transformer; GMM projection is the policy
+    num_heads: 4                  # public PyTorch Wayformer reproduction uses four heads
+    dropout: 0.10
+    num_encoder_layers: 2
+    num_latents: 96               # runtime projection of the paper's larger latent budget
+    num_output_queries: 64        # paper WOMD setting uses 64 mixture/output queries
+    num_mode_decoder_layers: 2   # preserves repeated self/cross decoder operator; paper SOTA uses 8
+    history_len: 11
+    future_len: 20
+    source_max_agents: 16         # all actors exposed by the current OC-RAP sample contract
+    source_map_polygons: 64
+    source_map_points: 20
     mlp_hidden: 128
-    mlp_layers: 4
+    mlp_layers: 2
   training:
-    # Avoid incompatible cuDNN SDPA execution-plan selection while retaining fast fused fallbacks.
     sdpa_backend: safe
-    # Prefer BF16 only when the current GPU supports it; otherwise use FP16 + GradScaler.
     amp_dtype: auto
     device: auto
     distributed: auto
-    batch_size: 128
+    batch_size: 64
     num_workers: 8
     epochs: 24
-    lr: 0.0001
-    weight_decay: 0.0002
+    lr: 0.0002                    # paper/commonly reproduced Wayformer AdamW LR
+    weight_decay: 0.01               # AdamW default / bundled open reproduction
+    scheduler: linear                 # paper: linear LR decay; projected to the configured epoch budget
+    min_lr_factor: 0.0
     grad_clip: 5.0
     tqdm: true
     pin_memory: true
     find_unused_parameters: auto
   loss_weights:
     policy: 1.0
+    wayformer_native: 1.0
     utility: 0.0
     hard: 0.0
     harm: 0.0

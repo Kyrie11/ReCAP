@@ -2,17 +2,26 @@ external_baselines:
   baseline: severity_minimization
   methods: [severity_minimization]
   max_candidates: 24
+  implementation: parseh2023_paper_core_v58
   policy:
-    contact_dt: 0.1
-    contact_mu: 0.75
-    severity_gamma: 0.0
-    severity_harm_weight: 10.0
-    severity_hard_weight: 5.0
-    severity_delta_v_weight: 2.0
-    severity_residual_energy_weight: 0.8
-    severity_instability_weight: 1.2
-    severity_odg_weight: 0.6
-    severity_deployability_weight: 1.5
-    severity_rdep_weight: 0.25
-    severity_utility_tiebreak: 0.05
-    severity_contact_macro_bonus: 0.20
+    # Parseh/Nybacka/Asplund source parameters (Table A1 / Sec. 4).
+    severity_collision_dt: 0.1
+    severity_collision_horizon_steps: 20
+    severity_contact_mu: 0.4
+    severity_target_mass_kg: 2150.0
+    severity_ego_mass_kg: 2150.0
+    severity_target_izz_kgm2: 3075.0
+    severity_ego_izz_kgm2: 3075.0
+    severity_lf_m: 1.4
+    severity_lr_m: 1.45
+    severity_front_stiffness_factor: 22.0
+    severity_rear_stiffness_factor: 22.0
+    severity_road_mu: 0.76
+    severity_rolling_resistance: 0.013
+    severity_postimpact_dt: 0.02
+    severity_postimpact_steps: 100
+    # Eq. (25) demonstration uses equal weights.
+    severity_w1: 1.0
+    severity_w2: 1.0
+    severity_w3: 1.0
+    severity_w4: 1.0

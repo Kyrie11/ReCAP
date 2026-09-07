@@ -22,6 +22,10 @@ def _make_transformer_encoder(layer: nn.TransformerEncoderLayer, num_layers: int
         return nn.TransformerEncoder(layer, num_layers=int(num_layers))
 import torch.nn.functional as F
 
+from ocrap.external_baselines.source_ports import (
+    GameFormerSourcePort, PlanTFSourcePort, PLUTOSourcePort,
+)
+
 
 ACTOR_TOPO_FEATURE_DIM = 16
 MAP_TOPO_FEATURE_DIM = 14
@@ -97,57 +101,311 @@ class ScalarHeads(nn.Module):
 
 
 class WayformerRouteBC(nn.Module):
-    """Route-conditioned behavior cloning baseline with Wayformer-style latents."""
+    """Wayformer architecture port for executable ego-candidate behavior cloning.
 
-    def __init__(self, input_dim: int, max_candidates: int = 32, d_model: int = 256, num_layers: int = 4, num_heads: int = 8, dropout: float = 0.15, mlp_hidden: int = 128, mlp_layers: int = 4, num_latents: int = 16) -> None:
+    Wayformer itself is a *motion-forecasting* model, not a planner.  The v57
+    adapter applied latent attention only to the executable-candidate tokens and
+    therefore did not preserve the paper's central early-fusion scene encoder.
+    This v58 adapter keeps the source/paper mechanisms that are meaningful under
+    the common OC-RAP action interface:
+
+      * homogeneous early fusion of agent-history and vector-map tokens,
+      * a Perceiver-style trainable latent-query bottleneck,
+      * repeated latent decoder attention, and
+      * multimodal/query decoding projected onto the finite executable lattice.
+
+    The final query is one executable candidate rather than one future-trajectory
+    mixture component.  This is therefore intentionally named an architecture-
+    faithful ego-BC *adapter*, never an official Wayformer planner reproduction.
+    All scene inputs are observation-only and are shared once per candidate set.
+    """
+
+    def __init__(
+        self,
+        input_dim: int,
+        max_candidates: int = 32,
+        d_model: int = 256,
+        num_layers: int = 4,
+        num_heads: int = 8,
+        dropout: float = 0.15,
+        mlp_hidden: int = 128,
+        mlp_layers: int = 4,
+        num_latents: int = 96,
+        num_encoder_layers: int = 2,
+        num_decoder_layers: int | None = None,
+        source_agent_state_dim: int = 9,
+        source_map_point_dim: int = 6,
+        source_map_meta_dim: int = 4,
+        source_map_center_dim: int = 3,
+        max_history_steps: int = 32,
+        max_source_agents: int = 32,
+        future_len: int = 20,
+        num_output_queries: int = 64,
+        num_mode_decoder_layers: int = 2,
+    ) -> None:
         super().__init__()
         self.input_dim = int(input_dim)
         self.max_candidates = int(max_candidates)
         self.d_model = int(d_model)
-        self.num_latents = int(num_latents)
-        self.token_proj = nn.Sequential(nn.LayerNorm(self.input_dim), nn.Linear(self.input_dim, d_model), nn.GELU(), nn.Dropout(dropout))
-        self.pos = nn.Parameter(torch.zeros(1, self.max_candidates, d_model))
-        self.type_route = nn.Parameter(torch.zeros(1, 1, d_model))
-        enc_layer = nn.TransformerEncoderLayer(d_model=d_model, nhead=int(num_heads), dim_feedforward=4 * d_model, dropout=float(dropout), activation="gelu", batch_first=True, norm_first=True)
-        self.encoder = _make_transformer_encoder(enc_layer, int(num_layers))
-        if self.num_latents > 0:
-            self.latents = nn.Parameter(torch.randn(1, self.num_latents, d_model) * 0.02)
-            self.latent_xattn = nn.MultiheadAttention(d_model, int(num_heads), dropout=float(dropout), batch_first=True)
-            self.token_xattn = nn.MultiheadAttention(d_model, int(num_heads), dropout=float(dropout), batch_first=True)
-            self.latent_norm = nn.LayerNorm(d_model)
-        else:
-            self.latents = None
-            self.latent_xattn = None
-            self.token_xattn = None
-            self.latent_norm = None
+        self.num_latents = max(1, int(num_latents))
+        self.num_decoder_layers = int(num_decoder_layers if num_decoder_layers is not None else num_layers)
+        self.future_len = max(2, int(future_len))
+        self.num_output_queries = max(1, int(num_output_queries))
+
+        # Candidate queries are the benchmark projection of Wayformer's output
+        # queries. They never enter the scene encoder, so scene compute is shared
+        # across all executable candidates.
+        self.candidate_proj = nn.Sequential(
+            nn.LayerNorm(self.input_dim), nn.Linear(self.input_dim, d_model), nn.GELU(), nn.Dropout(dropout)
+        )
+        self.candidate_pos = nn.Parameter(torch.zeros(1, self.max_candidates, d_model))
+        self.candidate_type = nn.Parameter(torch.zeros(1, 1, d_model))
+
+        # Paper/source early-fusion inputs.  Map points are pooled *within each
+        # polyline* before homogeneous fusion.  This is an explicit runtime
+        # projection that avoids flattening thousands of padded map points while
+        # retaining vector-map geometry and map semantics.
+        self.agent_proj = nn.Sequential(nn.Linear(int(source_agent_state_dim), d_model), nn.GELU())
+        self.map_point_proj = nn.Sequential(nn.Linear(int(source_map_point_dim), d_model), nn.GELU())
+        self.map_meta_proj = nn.Sequential(
+            nn.Linear(int(source_map_meta_dim) + int(source_map_center_dim), d_model), nn.GELU()
+        )
+        self.agent_type = nn.Parameter(torch.zeros(1, 1, 1, d_model))
+        self.map_type = nn.Parameter(torch.zeros(1, 1, d_model))
+        self.time_pos = nn.Parameter(torch.zeros(1, 1, int(max_history_steps), d_model))
+        self.agent_pos = nn.Parameter(torch.zeros(1, int(max_source_agents), 1, d_model))
+
+        self.latents = nn.Parameter(torch.randn(1, self.num_latents, d_model) * 0.02)
+        self.scene_to_latent = nn.MultiheadAttention(d_model, int(num_heads), dropout=float(dropout), batch_first=True)
+        self.latent_in_norm = nn.LayerNorm(d_model)
+        enc_layer = nn.TransformerEncoderLayer(
+            d_model=d_model, nhead=int(num_heads), dim_feedforward=4 * d_model,
+            dropout=float(dropout), activation="gelu", batch_first=True, norm_first=True,
+        )
+        self.latent_encoder = _make_transformer_encoder(enc_layer, int(num_encoder_layers))
+
+        # Wayformer's decoder produces a multi-modal trajectory distribution.
+        # Keep that native forecasting objective and project its likelihood onto
+        # executable ego candidates instead of pretending Wayformer itself is a
+        # planning policy.
+        self.output_queries = nn.Parameter(torch.randn(1, self.num_output_queries, d_model) * 0.02)
+        # Source/Paper Perceiver-style decoder: learned output queries alternate
+        # cross-attention to the scene latents with query self-attention/FFN.
+        # The public benchmark configuration uses eight layers; v58 keeps a
+        # smaller explicit runtime depth while preserving the decoder operator.
+        n_mode_layers = max(1, int(num_mode_decoder_layers))
+        self.mode_cross = nn.ModuleList([
+            nn.MultiheadAttention(d_model, int(num_heads), dropout=float(dropout), batch_first=True)
+            for _ in range(n_mode_layers)
+        ])
+        self.mode_self = nn.ModuleList([
+            nn.MultiheadAttention(d_model, int(num_heads), dropout=float(dropout), batch_first=True)
+            for _ in range(n_mode_layers)
+        ])
+        self.mode_norm1 = nn.ModuleList([nn.LayerNorm(d_model) for _ in range(n_mode_layers)])
+        self.mode_norm2 = nn.ModuleList([nn.LayerNorm(d_model) for _ in range(n_mode_layers)])
+        self.mode_norm3 = nn.ModuleList([nn.LayerNorm(d_model) for _ in range(n_mode_layers)])
+        self.mode_ffn = nn.ModuleList([
+            nn.Sequential(nn.Linear(d_model, 4 * d_model), nn.GELU(), nn.Dropout(dropout), nn.Linear(4 * d_model, d_model))
+            for _ in range(n_mode_layers)
+        ])
+        # Per future step: mean x/y, log sigma x/y, correlation coefficient.
+        self.mode_traj_head = nn.Linear(d_model, self.future_len * 5)
+        self.mode_score_head = nn.Linear(d_model, 1)
+
+        self.decoder_cross = nn.ModuleList([
+            nn.MultiheadAttention(d_model, int(num_heads), dropout=float(dropout), batch_first=True)
+            for _ in range(self.num_decoder_layers)
+        ])
+        self.decoder_self = nn.ModuleList([
+            nn.MultiheadAttention(d_model, int(num_heads), dropout=float(dropout), batch_first=True)
+            for _ in range(self.num_decoder_layers)
+        ])
+        self.decoder_norm1 = nn.ModuleList([nn.LayerNorm(d_model) for _ in range(self.num_decoder_layers)])
+        self.decoder_norm2 = nn.ModuleList([nn.LayerNorm(d_model) for _ in range(self.num_decoder_layers)])
+        self.decoder_norm3 = nn.ModuleList([nn.LayerNorm(d_model) for _ in range(self.num_decoder_layers)])
+        self.decoder_ffn = nn.ModuleList([
+            nn.Sequential(nn.Linear(d_model, 4 * d_model), nn.GELU(), nn.Dropout(dropout), nn.Linear(4 * d_model, d_model))
+            for _ in range(self.num_decoder_layers)
+        ])
         self.norm = nn.LayerNorm(d_model)
-        self.policy_head = ResidualMLP(d_model, hidden_dim=int(mlp_hidden), num_layers=int(mlp_layers), dropout=float(dropout), out_dim=1)
+        self.policy_head = ResidualMLP(
+            d_model, hidden_dim=int(mlp_hidden), num_layers=int(mlp_layers), dropout=float(dropout), out_dim=1
+        )
         self.scalar_heads = ScalarHeads(d_model)
 
-    def forward(self, x: torch.Tensor, mask: torch.Tensor | None = None, **_: torch.Tensor) -> dict[str, torch.Tensor]:
+    @staticmethod
+    def _masked_mean(x: torch.Tensor, mask: torch.Tensor, dim: int) -> torch.Tensor:
+        w = mask.to(dtype=x.dtype).unsqueeze(-1)
+        return (x * w).sum(dim=dim) / w.sum(dim=dim).clamp_min(1.0)
+
+    def _scene_tokens(
+        self,
+        B: int,
+        device: torch.device,
+        *,
+        source_agent_history: torch.Tensor | None,
+        source_agent_valid: torch.Tensor | None,
+        source_map_points: torch.Tensor | None,
+        source_map_point_valid: torch.Tensor | None,
+        source_map_meta: torch.Tensor | None,
+        source_map_center: torch.Tensor | None,
+        source_map_valid: torch.Tensor | None,
+        fallback: torch.Tensor,
+        fallback_mask: torch.Tensor | None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        if source_agent_history is None or source_map_points is None:
+            valid = torch.ones(fallback.shape[:2], dtype=torch.bool, device=device) if fallback_mask is None else fallback_mask.bool()
+            return fallback, valid
+
+        ah = source_agent_history.to(device=device, dtype=torch.float32)
+        av = source_agent_valid
+        if av is None:
+            av = ah.abs().sum(dim=-1) > 0
+        else:
+            av = av.to(device=device).bool()
+        A, H = ah.shape[1], ah.shape[2]
+        agent = self.agent_proj(ah)
+        if H <= self.time_pos.shape[2]:
+            tp = self.time_pos[:, :, :H]
+        else:
+            extra = self.time_pos[:, :, -1:].expand(1, 1, H - self.time_pos.shape[2], self.d_model)
+            tp = torch.cat([self.time_pos, extra], dim=2)
+        if A <= self.agent_pos.shape[1]:
+            ap = self.agent_pos[:, :A]
+        else:
+            extra = self.agent_pos[:, -1:].expand(1, A - self.agent_pos.shape[1], 1, self.d_model)
+            ap = torch.cat([self.agent_pos, extra], dim=1)
+        agent = agent + tp + ap + self.agent_type
+        agent = agent.reshape(B, A * H, self.d_model)
+        av_flat = av.reshape(B, A * H)
+
+        mp = source_map_points.to(device=device, dtype=torch.float32)
+        mpv = source_map_point_valid
+        if mpv is None:
+            mpv = mp.abs().sum(dim=-1) > 0
+        else:
+            mpv = mpv.to(device=device).bool()
+        point = self.map_point_proj(mp)
+        map_tok = self._masked_mean(point, mpv, dim=2)
+        mm = torch.zeros(B, mp.shape[1], 4, device=device, dtype=torch.float32) if source_map_meta is None else source_map_meta.to(device=device, dtype=torch.float32)
+        mc = torch.zeros(B, mp.shape[1], 3, device=device, dtype=torch.float32) if source_map_center is None else source_map_center.to(device=device, dtype=torch.float32)
+        map_tok = map_tok + self.map_meta_proj(torch.cat([mm, mc], dim=-1)) + self.map_type
+        mv = mpv.any(dim=-1) if source_map_valid is None else source_map_valid.to(device=device).bool()
+
+        scene = torch.cat([agent, map_tok], dim=1)
+        valid = torch.cat([av_flat, mv], dim=1)
+        # MultiheadAttention cannot consume a batch row whose entire memory is
+        # masked.  Keep one neutral token in that pathological case.
+        empty = ~valid.any(dim=1)
+        if bool(empty.any()):
+            scene = scene.clone(); valid = valid.clone()
+            scene[empty, 0] = 0.0
+            valid[empty, 0] = True
+        return scene, valid
+
+    def forward(
+        self,
+        x: torch.Tensor,
+        mask: torch.Tensor | None = None,
+        *,
+        source_agent_history: torch.Tensor | None = None,
+        source_agent_valid: torch.Tensor | None = None,
+        source_map_points: torch.Tensor | None = None,
+        source_map_point_valid: torch.Tensor | None = None,
+        source_map_meta: torch.Tensor | None = None,
+        source_map_center: torch.Tensor | None = None,
+        source_map_valid: torch.Tensor | None = None,
+        prefix_traj: torch.Tensor | None = None,
+        prefix_valid: torch.Tensor | None = None,
+        **_: torch.Tensor,
+    ) -> dict[str, torch.Tensor]:
         B, N, _ = x.shape
-        h = self.token_proj(x) + self._position(N) + self.type_route
-        key_padding_mask = None if mask is None else ~mask.bool()
-        h = self.encoder(h, src_key_padding_mask=key_padding_mask)
-        if self.num_latents > 0 and self.latents is not None:
-            lat = self.latents.expand(B, -1, -1)
-            lat, _ = self.latent_xattn(lat, h, h, key_padding_mask=key_padding_mask, need_weights=False)
-            lat = self.latent_norm(lat)
-            h2, _ = self.token_xattn(h, lat, lat, need_weights=False)
-            h = h + h2
+        q = self.candidate_proj(x) + self._position(N) + self.candidate_type
+        cand_valid = torch.ones((B, N), dtype=torch.bool, device=x.device) if mask is None else mask.bool()
+        scene, scene_valid = self._scene_tokens(
+            B, x.device,
+            source_agent_history=source_agent_history,
+            source_agent_valid=source_agent_valid,
+            source_map_points=source_map_points,
+            source_map_point_valid=source_map_point_valid,
+            source_map_meta=source_map_meta,
+            source_map_center=source_map_center,
+            source_map_valid=source_map_valid,
+            fallback=q,
+            fallback_mask=cand_valid,
+        )
+        lat = self.latents.expand(B, -1, -1)
+        z, _ = self.scene_to_latent(lat, scene, scene, key_padding_mask=~scene_valid, need_weights=False)
+        lat = self.latent_encoder(self.latent_in_norm(lat + z))
+
+        mode_h = self.output_queries.expand(B, -1, -1)
+        for cross, self_attn, n1, n2, n3, ffn in zip(
+            self.mode_cross, self.mode_self, self.mode_norm1, self.mode_norm2, self.mode_norm3, self.mode_ffn,
+        ):
+            z, _ = cross(n1(mode_h), lat, lat, need_weights=False)
+            mode_h = mode_h + z
+            qn = n2(mode_h)
+            z, _ = self_attn(qn, qn, qn, need_weights=False)
+            mode_h = mode_h + z
+            mode_h = mode_h + ffn(n3(mode_h))
+        mode_params = self.mode_traj_head(mode_h).view(B, self.num_output_queries, self.future_len, 5)
+        mode_logits = self.mode_score_head(mode_h).squeeze(-1)
+
+        key_padding_mask = ~cand_valid
+        h = q
+        for cross, self_attn, n1, n2, n3, ffn in zip(
+            self.decoder_cross, self.decoder_self, self.decoder_norm1,
+            self.decoder_norm2, self.decoder_norm3, self.decoder_ffn,
+        ):
+            z, _ = cross(n1(h), lat, lat, need_weights=False)
+            h = h + z
+            z, _ = self_attn(n2(h), n2(h), n2(h), key_padding_mask=key_padding_mask, need_weights=False)
+            h = h + z
+            h = h + ffn(n3(h))
         h = self.norm(h)
-        logits = self.policy_head(h).squeeze(-1)
-        if mask is not None:
-            logits = logits.masked_fill(~mask.bool(), -1.0e4)
-        out = {"logits": logits}
+        fallback_logits = self.policy_head(h).squeeze(-1)
+        logits = fallback_logits
+        if prefix_traj is not None:
+            cand = prefix_traj.to(device=x.device, dtype=torch.float32)
+            if cand.shape[-2] != self.future_len:
+                # Runtime contracts normally build exactly ``future_len`` points;
+                # retain a deterministic interpolation fallback for old caches.
+                flat = cand.reshape(B * cand.shape[1], cand.shape[2], 2).permute(0, 2, 1)
+                cand = F.interpolate(flat, size=self.future_len, mode="linear", align_corners=True).permute(0, 2, 1).reshape(B, -1, self.future_len, 2)
+            valid_t = torch.ones(cand.shape[:-1], dtype=torch.bool, device=x.device) if prefix_valid is None else prefix_valid.to(device=x.device).bool()
+            if valid_t.shape[-1] != self.future_len:
+                valid_t = F.interpolate(valid_t.float().reshape(B * valid_t.shape[1], 1, -1), size=self.future_len, mode="nearest").reshape(B, -1, self.future_len) > 0.5
+            mu = mode_params[..., :2]
+            log_s = mode_params[..., 2:4].clamp(-1.609, 5.0)
+            rho = mode_params[..., 4].clamp(-0.5, 0.5)
+            diff = cand[:, :, None, :, :] - mu[:, None, :, :, :]
+            sx = torch.exp(log_s[..., 0])[:, None]
+            sy = torch.exp(log_s[..., 1])[:, None]
+            rr = rho[:, None]
+            dx = diff[..., 0]; dy = diff[..., 1]
+            one_m = (1.0 - rr.square()).clamp_min(1.0e-4)
+            z2 = (dx / sx).square() + (dy / sy).square() - 2.0 * rr * dx * dy / (sx * sy)
+            point_nll = log_s[..., 0][:, None] + log_s[..., 1][:, None] + 0.5 * torch.log(one_m) + 0.5 * z2 / one_m
+            vm = valid_t[:, :, None, :].to(point_nll.dtype)
+            mode_nll = (point_nll * vm).sum(-1) / vm.sum(-1).clamp_min(1.0)
+            log_mix = torch.log_softmax(mode_logits.float(), dim=-1)[:, None, :]
+            logits = torch.logsumexp(log_mix - mode_nll.float(), dim=-1)
+        logits = logits.masked_fill(~cand_valid, -1.0e4)
+        out = {
+            "logits": logits,
+            "wayformer_mode_params": mode_params,
+            "wayformer_mode_logits": mode_logits,
+            "wayformer_scene_latent_norm": lat.float().norm(dim=-1).mean(dim=-1),
+        }
         out.update(self.scalar_heads(h))
         return out
 
     def _position(self, N: int) -> torch.Tensor:
-        if N > self.pos.shape[1]:
-            extra = self.pos[:, -1:, :].expand(1, N - self.pos.shape[1], -1)
-            return torch.cat([self.pos, extra], dim=1)[:, :N]
-        return self.pos[:, :N]
+        if N > self.candidate_pos.shape[1]:
+            extra = self.candidate_pos[:, -1:, :].expand(1, N - self.candidate_pos.shape[1], -1)
+            return torch.cat([self.candidate_pos, extra], dim=1)[:, :N]
+        return self.candidate_pos[:, :N]
 
 
 class GameFormerFutureEncoder(nn.Module):
@@ -199,7 +457,7 @@ class GameFormerFutureEncoder(nn.Module):
         size = torch.ones(B, N, M, T, 2, device=traj_xy.device, dtype=state_dtype)
         valid = torch.ones(B, N, M, T, 1, device=traj_xy.device, dtype=state_dtype)
         state = torch.cat([traj_xy, heading32.to(state_dtype), vel32.to(state_dtype), size, valid], dim=-1)
-        step = self.step_mlp(state)
+        step = self.step_mlp(state.detach())
         pooled = step.max(dim=-2).values
         # Softmax is cheap and is a second numerically sensitive reduction.
         # Evaluate it in FP32 and cast the probabilities back for the weighted sum.
@@ -447,16 +705,27 @@ class GameFormerLevelK(nn.Module):
 
 
 class TopoFuser(nn.Module):
-    """Compact counterpart of BeTop's TopoFuser."""
+    """Source-structured BeTop TopoFuser.
+
+    The official implementation projects source and target features separately
+    to ``d/2``, concatenates the pairwise embeddings, and *adds* the previous
+    topology feature before the topology decoder.  v57 concatenated ``prev`` as
+    a third raw input, which changes the iterative topology semantics.
+    """
 
     def __init__(self, d_model: int, dropout: float) -> None:
         super().__init__()
-        self.net = nn.Sequential(nn.LayerNorm(3 * d_model), nn.Linear(3 * d_model, d_model), nn.GELU(), nn.Dropout(dropout), nn.Linear(d_model, d_model))
+        half = max(1, int(d_model) // 2)
+        self.src_mlp = nn.Sequential(nn.Linear(d_model, d_model), nn.ReLU(inplace=True), nn.Dropout(dropout), nn.Linear(d_model, half))
+        self.tgt_mlp = nn.Sequential(nn.Linear(d_model, d_model), nn.ReLU(inplace=True), nn.Dropout(dropout), nn.Linear(d_model, half))
+        self.out_dim = 2 * half
+        self.out_proj = nn.Identity() if self.out_dim == d_model else nn.Linear(self.out_dim, d_model)
 
     def forward(self, src: torch.Tensor, tgt: torch.Tensor, prev: torch.Tensor | None) -> torch.Tensor:
-        if prev is None:
-            prev = torch.zeros_like(tgt)
-        return self.net(torch.cat([src, tgt, prev], dim=-1))
+        feat = self.out_proj(torch.cat([self.src_mlp(src), self.tgt_mlp(tgt)], dim=-1))
+        if prev is not None:
+            feat = feat + prev
+        return feat
 
 
 class BeTopNetLite(nn.Module):
@@ -568,7 +837,7 @@ class BeTopNetLite(nn.Module):
     def _apply_topo_attention(self, h: torch.Tensor, mem: torch.Tensor, logits: torch.Tensor, valid_mask: torch.Tensor, attn: nn.MultiheadAttention, cand_mask: torch.Tensor | None) -> torch.Tensor:
         B, N, Kall, D = mem.shape
         k = min(max(1, self.num_topo), Kall)
-        score = torch.sigmoid(logits).masked_fill(~valid_mask.bool(), -1.0e4)
+        score = torch.sigmoid(logits.detach()).masked_fill(~valid_mask.bool(), -1.0e4)
         idx = torch.topk(score, k=k, dim=-1).indices
         gather = idx.unsqueeze(-1).expand(B, N, k, D)
         selected = torch.gather(mem, dim=2, index=gather).reshape(B * N, k, D)
@@ -783,7 +1052,12 @@ class PLUTOAdapter(nn.Module):
 
 
 class PDMHybridAdapter(nn.Module):
-    """Learned long-horizon refinement head used by the PDM-Hybrid selector."""
+    """Legacy learned PDM-Hybrid adapter kept only for old checkpoint compatibility.
+
+    v54 main-table PDM-Hybrid never constructs this module: source semantics keep
+    the executed trajectory identical to PDM-Closed before the 2.0 s correction
+    horizon.
+    """
 
     def __init__(self, input_dim: int, max_candidates: int = 32, d_model: int = 128, num_layers: int = 3, num_heads: int = 4, dropout: float = 0.10) -> None:
         super().__init__()
@@ -832,6 +1106,37 @@ def build_model_from_cfg(input_dim: int, cfg: dict[str, Any]) -> nn.Module:
         num_heads=int(mcfg.get("num_heads", 4)),
         dropout=float(mcfg.get("dropout", 0.15)),
     )
+    implementation = str(mcfg.get("implementation", bcfg.get("implementation", ""))).lower()
+    if implementation in {"source_port", "source_port_v54", "sourceported_v54"}:
+        source_common = dict(
+            d_model=int(mcfg.get("d_model", 256 if "gameformer" in baseline else 128)),
+            num_layers=int(mcfg.get("num_layers", 6 if "gameformer" in baseline else 4)),
+            num_heads=int(mcfg.get("num_heads", 8 if baseline != "pluto" else 4)),
+            dropout=float(mcfg.get("dropout", 0.10)),
+            future_len=int(mcfg.get("future_len", 20)),
+        )
+        if "gameformer" in baseline or arch in {"gameformer", "gameformer_lite", "gameformer_levelk"}:
+            return GameFormerSourcePort(
+                **source_common,
+                num_levels=int(mcfg.get("num_levels", 4)),
+                modalities=int(mcfg.get("modalities", 6)),
+                source_max_agents=int(mcfg.get("source_max_agents", int(mcfg.get("neighbors_to_predict", 8)) + 1)),
+                projection_beta=float(mcfg.get("projection_beta", 2.0)),
+            )
+        if baseline in {"plantf", "plan_tf", "plantf_adapter"} or arch in {"plantf", "plan_tf", "plantf_adapter"}:
+            return PlanTFSourcePort(
+                **source_common,
+                state_dropout=float(mcfg.get("state_dropout", 0.75)),
+                num_modes=int(mcfg.get("num_modes", 6)),
+                projection_beta=float(mcfg.get("projection_beta", 2.0)),
+            )
+        if baseline in {"pluto", "pluto_adapter"} or arch in {"pluto", "pluto_adapter"}:
+            return PLUTOSourcePort(
+                **source_common,
+                state_dropout=float(mcfg.get("state_dropout", 0.75)),
+                decoder_depth=int(mcfg.get("decoder_depth", 4)),
+                num_modes=int(mcfg.get("num_modes", 12)),
+            )
     if arch in {"gameformer", "gameformer_levelk", "levelk"} or "gameformer" in baseline:
         return GameFormerLevelK(
             **common,
@@ -879,5 +1184,12 @@ def build_model_from_cfg(input_dim: int, cfg: dict[str, Any]) -> nn.Module:
         **common,
         mlp_hidden=int(mcfg.get("mlp_hidden", 128)),
         mlp_layers=int(mcfg.get("mlp_layers", 4)),
-        num_latents=int(mcfg.get("num_latents", 16)),
+        num_latents=int(mcfg.get("num_latents", 96)),
+        num_encoder_layers=int(mcfg.get("num_encoder_layers", 2)),
+        num_decoder_layers=int(mcfg.get("num_decoder_layers", mcfg.get("num_layers", 4))),
+        max_history_steps=int(mcfg.get("max_history_steps", mcfg.get("history_len", 11))),
+        max_source_agents=int(mcfg.get("source_max_agents", 32)),
+        future_len=int(mcfg.get("future_len", 20)),
+        num_output_queries=int(mcfg.get("num_output_queries", 64)),
+        num_mode_decoder_layers=int(mcfg.get("num_mode_decoder_layers", 2)),
     )

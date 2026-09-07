@@ -1,11 +1,4 @@
 {
-  "schema_version": 3,
-  "regimes": [
-    "safe",
-    "near",
-    "contact"
-  ],
-  "reporting_rule": "Main-table methods are six per regime. Candidate-lattice adaptations must not be described as author-official or native benchmark reproductions.",
   "main_table_by_regime": {
     "safe": [
       "gameformer_lite",
@@ -32,23 +25,6 @@
       "robust_postimpact_control"
     ]
   },
-  "legacy_or_diagnostic_by_regime": {
-    "safe": [
-      "nominal_replay",
-      "wayformer_bc",
-      "betopnet_lite"
-    ],
-    "near": [
-      "gameformer_lite",
-      "expected_risk_filter",
-      "cvar_risk_filter",
-      "dro_cvar_filter",
-      "oracle_recovery_filter"
-    ],
-    "contact": [
-      "severity_minimization"
-    ]
-  },
   "baselines": [
     {
       "canonical_name": "nominal_replay",
@@ -71,11 +47,7 @@
       ],
       "known_gaps": [],
       "reporting_name": "Logged nominal replay",
-      "main_regimes": [],
-      "legacy_or_diagnostic_regimes": [
-        "safe"
-      ],
-      "table_role": "legacy/control/diagnostic"
+      "role": "legacy/control/diagnostic"
     },
     {
       "canonical_name": "wayformer_bc",
@@ -109,11 +81,7 @@
         "candidate classification replaces the original multimodal trajectory output"
       ],
       "reporting_name": "Wayformer-style route BC",
-      "main_regimes": [],
-      "legacy_or_diagnostic_regimes": [
-        "safe"
-      ],
-      "table_role": "legacy/control/diagnostic"
+      "role": "legacy/control/diagnostic"
     },
     {
       "canonical_name": "gameformer_lite",
@@ -150,13 +118,7 @@
         "not checkpoint-compatible with the official repository"
       ],
       "reporting_name": "GameFormer (source-ported)",
-      "main_regimes": [
-        "safe"
-      ],
-      "legacy_or_diagnostic_regimes": [
-        "near"
-      ],
-      "table_role": "main: safe; legacy/diagnostic: near"
+      "role": "main: safe"
     },
     {
       "canonical_name": "plantf",
@@ -193,11 +155,7 @@
         "not checkpoint-compatible with official weights"
       ],
       "reporting_name": "PlanTF (source-ported)",
-      "main_regimes": [
-        "safe"
-      ],
-      "legacy_or_diagnostic_regimes": [],
-      "table_role": "main: safe"
+      "role": "main: safe"
     },
     {
       "canonical_name": "pluto",
@@ -233,11 +191,7 @@
         "not checkpoint-compatible with official weights"
       ],
       "reporting_name": "PLUTO (source-ported)",
-      "main_regimes": [
-        "safe"
-      ],
-      "legacy_or_diagnostic_regimes": [],
-      "table_role": "main: safe"
+      "role": "main: safe"
     },
     {
       "canonical_name": "pdm_closed",
@@ -267,11 +221,7 @@
         "PDM emergency-brake override is not independently reconstructed"
       ],
       "reporting_name": "PDM-Closed (source-scorer port)",
-      "main_regimes": [
-        "safe"
-      ],
-      "legacy_or_diagnostic_regimes": [],
-      "table_role": "main: safe"
+      "role": "main: safe"
     },
     {
       "canonical_name": "pdm_hybrid",
@@ -299,11 +249,7 @@
         "a faithful hybrid advantage requires an 8 s trajectory target/evaluation path rather than a learned logit that changes the pre-2 s action"
       ],
       "reporting_name": "PDM-Hybrid (source prefix semantics)",
-      "main_regimes": [
-        "safe"
-      ],
-      "legacy_or_diagnostic_regimes": [],
-      "table_role": "main: safe"
+      "role": "main: safe"
     },
     {
       "canonical_name": "idm",
@@ -330,11 +276,7 @@
         "lateral path choice comes from the common candidate set"
       ],
       "reporting_name": "IDM projection",
-      "main_regimes": [
-        "safe"
-      ],
-      "legacy_or_diagnostic_regimes": [],
-      "table_role": "main: safe"
+      "role": "main: safe"
     },
     {
       "canonical_name": "betopnet_lite",
@@ -367,11 +309,7 @@
         "candidate selector replaces the unreleased full planning stack"
       ],
       "reporting_name": "BeTop topology-aware adapter",
-      "main_regimes": [],
-      "legacy_or_diagnostic_regimes": [
-        "safe"
-      ],
-      "table_role": "legacy/control/diagnostic"
+      "role": "legacy/control/diagnostic"
     },
     {
       "canonical_name": "marc_lite",
@@ -404,11 +342,7 @@
         "the shared predictor is an OC-RAP interface component and is not attributed to MARC"
       ],
       "reporting_name": "MARC (paper-core candidate-lattice port)",
-      "main_regimes": [
-        "near"
-      ],
-      "legacy_or_diagnostic_regimes": [],
-      "table_role": "main: near"
+      "role": "main: near"
     },
     {
       "canonical_name": "racp_lite",
@@ -442,11 +376,7 @@
         "the user bibliography cites the IEEE T-IV article as 2024; some bibliographic services may display the final volume year separately"
       ],
       "reporting_name": "RACP (source-structured candidate-lattice port)",
-      "main_regimes": [
-        "near"
-      ],
-      "legacy_or_diagnostic_regimes": [],
-      "table_role": "main: near"
+      "role": "main: near"
     },
     {
       "canonical_name": "robust_scenario_mpc",
@@ -479,11 +409,7 @@
         "recursive-feasibility theorem assumptions are therefore not claimed for the adapter"
       ],
       "reporting_name": "Robust scenario MPC (paper-core candidate-lattice port)",
-      "main_regimes": [
-        "near"
-      ],
-      "legacy_or_diagnostic_regimes": [],
-      "table_role": "main: near"
+      "role": "main: near"
     },
     {
       "canonical_name": "dr_cvar_safety_filter",
@@ -515,11 +441,7 @@
         "not checkpoint/solver-output identical to the authors' synthetic drone experiments"
       ],
       "reporting_name": "DR-CVaR safety filter (source-structured port)",
-      "main_regimes": [
-        "near"
-      ],
-      "legacy_or_diagnostic_regimes": [],
-      "table_role": "main: near"
+      "role": "main: near"
     },
     {
       "canonical_name": "conformal_predictive_safety_filter",
@@ -552,11 +474,7 @@
         "formal coverage additionally depends on the exchangeability/independence of the chosen OC-RAP calibration unit; the artifact records that unit and finite-sample validity diagnostics"
       ],
       "reporting_name": "Conformal predictive safety filter (paper-core port)",
-      "main_regimes": [
-        "near"
-      ],
-      "legacy_or_diagnostic_regimes": [],
-      "table_role": "main: near"
+      "role": "main: near"
     },
     {
       "canonical_name": "expected_risk_filter",
@@ -581,11 +499,7 @@
       ],
       "known_gaps": [],
       "reporting_name": "Expected-risk filter",
-      "main_regimes": [],
-      "legacy_or_diagnostic_regimes": [
-        "near"
-      ],
-      "table_role": "legacy/control/diagnostic"
+      "role": "legacy/control/diagnostic"
     },
     {
       "canonical_name": "cvar_risk_filter",
@@ -610,11 +524,7 @@
       ],
       "known_gaps": [],
       "reporting_name": "CVaR risk filter",
-      "main_regimes": [],
-      "legacy_or_diagnostic_regimes": [
-        "near"
-      ],
-      "table_role": "legacy/control/diagnostic"
+      "role": "legacy/control/diagnostic"
     },
     {
       "canonical_name": "dro_cvar_filter",
@@ -642,11 +552,7 @@
         "dispersion penalty is a fast Wasserstein-inspired surrogate rather than a full inner ambiguity optimization"
       ],
       "reporting_name": "DRO-CVaR filter",
-      "main_regimes": [],
-      "legacy_or_diagnostic_regimes": [
-        "near"
-      ],
-      "table_role": "legacy/control/diagnostic"
+      "role": "legacy/control/diagnostic"
     },
     {
       "canonical_name": "predictive_safety_filter",
@@ -678,11 +584,7 @@
         "legacy CBF-named aliases are accepted for command compatibility only; no CBF condition is attributed to the cited paper"
       ],
       "reporting_name": "Predictive safety filter (paper-core candidate-lattice port)",
-      "main_regimes": [
-        "near"
-      ],
-      "legacy_or_diagnostic_regimes": [],
-      "table_role": "main: near"
+      "role": "main: near"
     },
     {
       "canonical_name": "oracle_recovery_filter",
@@ -709,11 +611,7 @@
         "uses teacher tensors and must never be reported as deployable"
       ],
       "reporting_name": "Teacher oracle upper bound",
-      "main_regimes": [],
-      "legacy_or_diagnostic_regimes": [
-        "near"
-      ],
-      "table_role": "legacy/control/diagnostic"
+      "role": "legacy/control/diagnostic"
     },
     {
       "canonical_name": "postimpact_mpc_lite",
@@ -750,11 +648,7 @@
         "no CarSim/HIL plant or post-impact damage/impulse estimator is available in WOMD"
       ],
       "reporting_name": "Integrated post-impact MPC + PSO (paper-core port)",
-      "main_regimes": [
-        "contact"
-      ],
-      "legacy_or_diagnostic_regimes": [],
-      "table_role": "main: contact"
+      "role": "main: contact"
     },
     {
       "canonical_name": "post_crash_braking",
@@ -772,23 +666,21 @@
       "paper_year": 2017,
       "paper_url": "https://doi.org/10.4271/2017-01-1581",
       "official_code_url": null,
-      "implementation_kind": "finite-lattice autonomous post-impact braking adaptation",
-      "fidelity": "objective-level adaptation",
+      "implementation_kind": "paper-core autonomous PIB branch projected onto executable lattice",
+      "fidelity": "paper-core / patent-supported interface adaptation",
       "core_retained": [
-        "collision-triggered autonomous braking",
-        "ABS-level stable-stop intent",
-        "terminal-speed stabilization",
-        "secondary-risk gate"
+        "collision-triggered autonomous post-impact braking",
+        "no-driver PIB branch",
+        "braking up to ABS capability",
+        "kinetic-energy reduction and stop/stabilization termination"
       ],
       "known_gaps": [
-        "hydraulic/ABS actuator dynamics are not present in WOMD; braking is projected onto executable brake/stabilize candidates"
+        "WOMD has no brake-pedal/driver-intent signal so PIBA cannot be distinguished and the benchmark explicitly evaluates the autonomous no-driver PIB branch",
+        "hydraulic pressure, wheel-slip and ABS actuator dynamics are unavailable; ABS-level braking is projected onto executable longitudinal-acceleration candidates",
+        "the 8 km/h undesirable-motion threshold and 2.5 s termination default are supported by the related Ford inventor patent family and are not attributed as SAE-paper numerical parameters"
       ],
-      "reporting_name": "Autonomous post-impact braking",
-      "main_regimes": [
-        "contact"
-      ],
-      "legacy_or_diagnostic_regimes": [],
-      "table_role": "main: contact"
+      "reporting_name": "Post-impact braking (Lu et al. PIB port)",
+      "role": "main: contact"
     },
     {
       "canonical_name": "post_collision_restoration",
@@ -806,26 +698,25 @@
       "paper_year": 2026,
       "paper_url": "https://arxiv.org/abs/2602.08444",
       "official_code_url": null,
-      "implementation_kind": "finite-lattice restoration objective",
-      "fidelity": "objective-level adaptation",
+      "implementation_kind": "paper-core open-loop steering/tractive-force law projected onto executable lattice",
+      "fidelity": "paper-core mathematical port / source-ambiguity documented",
       "core_retained": [
-        "trajectory re-alignment",
-        "yaw stabilization",
-        "progress preservation",
-        "clearance/risk objective",
-        "Ackermann-feasibility proxies"
+        "Eq. (10) steering-direction composition",
+        "Eq. (13) first sine steering pulse",
+        "Eq. (16) second sine steering pulse interface",
+        "Eq. (18) initial-plus-compensatory tractive-force law",
+        "Eq. (21) compensatory sine force pulse",
+        "absolute paper-time pulse schedule and reported A1/Ac/Kdir parameters"
       ],
       "known_gaps": [
-        "paper is recent/preprint and no official implementation was identified",
-        "online state/impact estimator is not reproduced",
-        "continuous restoration optimization replaced by candidate selection"
+        "the 2026 source is an arXiv preprint and no official implementation was identified",
+        "Table 2 reports an undefined K1 while Eq. (16) requires A2 and does not report A2; v57 leaves A2=0 by default rather than inventing a mapping",
+        "WOMD has no wheel tractive-force state, so Fi is represented by the common nominal longitudinal acceleration and Fc/m is the explicit incremental lattice projection",
+        "the paper controller is open-loop; OC-RAP does not add learned future-agent risk to its selection objective",
+        "the paper reports separate tuned cases but no online case classifier; v57 selects the reported case from observed initial post-impact yaw-rate magnitude using an explicitly documented benchmark adapter threshold"
       ],
-      "reporting_name": "Post-collision restoration",
-      "main_regimes": [
-        "contact"
-      ],
-      "legacy_or_diagnostic_regimes": [],
-      "table_role": "main: contact"
+      "reporting_name": "Post-collision restoration (Ghosh et al. paper-core port)",
+      "role": "main: contact"
     },
     {
       "canonical_name": "postimpact_motion_tvlqr",
@@ -860,11 +751,7 @@
         "WOMD/Waymax does not expose wheel forces, collision-damage states, or the original high-fidelity vehicle plant"
       ],
       "reporting_name": "Post-impact quintic + TVLQR (paper-core port)",
-      "main_regimes": [
-        "contact"
-      ],
-      "legacy_or_diagnostic_regimes": [],
-      "table_role": "main: contact"
+      "role": "main: contact"
     },
     {
       "canonical_name": "compensatory_postimpact_mpc",
@@ -879,23 +766,24 @@
       "paper_year": 2021,
       "paper_url": "https://doi.org/10.1177/0954407020979087",
       "official_code_url": null,
-      "implementation_kind": "finite-lattice FCC-MPC adaptation",
-      "fidelity": "objective-level adaptation",
+      "implementation_kind": "source-limited FCC-MPC structured adaptation",
+      "fidelity": "objective-level / full-equation source unavailable",
       "core_retained": [
-        "lateral/yaw deviation attenuation",
-        "feedforward-feedback compensation objective",
-        "input/rate and adhesion proxies",
-        "secondary-collision risk term"
+        "feedforward-feedback compensation structure",
+        "reverse-steering response",
+        "differential-yaw-action intent",
+        "constraint transformation for initially deteriorated states",
+        "time-varying-style constraints on input/input rate/slip proxy",
+        "lateral/yaw deviation attenuation"
       ],
       "known_gaps": [
-        "wheel-level active-front-steering and differential-torque-vectoring allocation is unavailable in WOMD and is represented through candidate feasibility/control costs"
+        "the reliable online primary source exposes the abstract/metadata but not the full controller equations, weights or constraint-transform formula; v57 therefore does not claim equation-exact reproduction",
+        "WOMD has no wheel torque, wheel speed or measured slip-ratio states; active-front-steering/differential-torque-vectoring are projected through executable acceleration/steering candidates and an explicitly labelled longitudinal-utilisation proxy",
+        "the pre-impact path frame is estimated only from observed ego history because WOMD does not expose the paper vehicle reference-state interface",
+        "a full paper or official source upload is required for a second-pass equation-level port"
       ],
-      "reporting_name": "Compensatory post-impact MPC adapter",
-      "main_regimes": [
-        "contact"
-      ],
-      "legacy_or_diagnostic_regimes": [],
-      "table_role": "main: contact"
+      "reporting_name": "Compensatory post-impact FCC-MPC (source-limited adapter)",
+      "role": "main: contact"
     },
     {
       "canonical_name": "robust_postimpact_control",
@@ -911,23 +799,25 @@
       "paper_year": 2022,
       "paper_url": "https://doi.org/10.1049/itr2.12230",
       "official_code_url": null,
-      "implementation_kind": "finite-lattice sliding-mode/QP adaptation",
-      "fidelity": "objective-level adaptation",
+      "implementation_kind": "paper-core sliding-mode + exact small-QP allocation port",
+      "fidelity": "paper-core mathematical port / plant-interface adapted",
       "core_retained": [
-        "course/lateral sliding surfaces",
-        "yaw/stability recovery",
-        "adhesion-aware robust allocation proxy",
-        "fault-tolerant control-rate preference"
+        "Eqs. (17-19) course/yaw-rate and lateral-deviation sliding surface",
+        "Eqs. (21-23) reaching law and requested additional yaw moment",
+        "Eqs. (26-27) in-wheel-motor fault-gain model",
+        "Eqs. (28-34) tire-utilisation objective, force/yaw mapping and constrained quadratic allocation",
+        "source Table-1 vehicle parameters and Table-2 controller gains"
       ],
       "known_gaps": [
-        "in-wheel-motor fault model and convex wheel-torque allocation cannot be reconstructed from WOMD and are represented by executable-candidate feasibility/adhesion costs"
+        "OC-RAP begins from observed post-impact states and does not expose the impact point/force history, so explicit impact-force terms in U(t) are zero after the observed impact interval",
+        "WOMD has no IWM fault diagnosis; healthy fault factors are the default but user-supplied factors use the same published allocation",
+        "Waymax executes common acceleration/steering rather than four in-wheel torques; the source QP is therefore an actuator-realizability certificate/ranking term",
+        "the pre-impact original-road frame is estimated only from observed ego history so the published lateral-deviation/course-angle states remain meaningful after impact",
+        "the published motor-gain fault model is normalized to unit healthy gain because WOMD does not expose motor-electrical calibration",
+        "the accessible source specifies bounded motor torques but a universal numeric wheel-torque maximum is not recoverable for the benchmark, so that bound remains an explicit adapter parameter"
       ],
-      "reporting_name": "Robust post-impact stability-control adapter",
-      "main_regimes": [
-        "contact"
-      ],
-      "legacy_or_diagnostic_regimes": [],
-      "table_role": "main: contact"
+      "reporting_name": "Advanced post-impact SMC + fault-tolerant QP (paper-core port)",
+      "role": "main: contact"
     },
     {
       "canonical_name": "severity_minimization",
@@ -945,24 +835,21 @@
       "paper_year": 2023,
       "paper_url": "https://doi.org/10.1080/00423114.2022.2088396",
       "official_code_url": null,
-      "implementation_kind": "finite-lattice severity objective",
-      "fidelity": "paper-core adaptation",
+      "implementation_kind": "finite-lattice severity proxy",
+      "fidelity": "objective-level / requires post-impact-model source port",
       "core_retained": [
         "relative-speed severity proxy",
         "collision probability",
         "penetration/clearance penalty",
-        "post-impact stability and controllability"
+        "post-impact stability and controllability proxies"
       ],
       "known_gaps": [
-        "detailed occupant injury/damage models are not available in WOMD",
-        "continuous crash configuration optimization replaced by executable prefixes"
+        "the paper framework explicitly combines motion planning, vehicle dynamics and accident reconstruction, including a post-impact 4DOF longitudinal/lateral/yaw/roll model and collision model; the current selector does not reproduce those models",
+        "detailed collision-configuration, target-vehicle-property and post-impact roll states are not available in the current WOMD executable-candidate interface",
+        "continuous crash-configuration optimization is replaced by executable-prefix scoring; this method should be treated as a legacy objective-level adapter until a dedicated source port is implemented"
       ],
-      "reporting_name": "Unavoidable-collision severity minimization",
-      "main_regimes": [],
-      "legacy_or_diagnostic_regimes": [
-        "contact"
-      ],
-      "table_role": "legacy/control/diagnostic"
+      "reporting_name": "Unavoidable-collision severity minimization adapter",
+      "role": "legacy/control/diagnostic"
     }
   ]
 }

@@ -26,106 +26,198 @@ external_baselines:
     backup_reaction_time_s: 0.25
     cvar_alpha: 0.20
 
-    # Wang et al. 2023 planning-integrated post-impact MPC.
+    # Wang et al. 2023 planning-integrated post-impact MPC + PSO allocation.
+    # Paper parameters are preserved where reported; the 10 ms native MPC is
+    # evaluated on the common executable candidate lattice at OC-RAP's 100 ms
+    # sample grid, so prediction/control topology rather than absolute solver
+    # discretization is ported.
     postimpact_dt: 0.1
-    postimpact_mu: 0.75
+    postimpact_mu: 0.8
+    postimpact_prediction_horizon_steps: 10
+    postimpact_control_horizon_steps: 3
     postimpact_sbd_margin: 4.0
-    postimpact_sbd_wrong_mode_penalty: 1.5
-    postimpact_sbd_terminal_speed_weight: 0.35
-    postimpact_lane_change_lateral_weight: 0.08
-    postimpact_yaw_rate_weight: 1.4
-    postimpact_yaw_acc_weight: 0.15
-    postimpact_terminal_speed_weight: 0.25
-    postimpact_accel_weight: 0.08
-    postimpact_steer_weight: 0.08
-    postimpact_jerk_weight: 0.02
-    postimpact_adhesion_weight: 1.1
-    postimpact_expected_risk_weight: 5.0
-    postimpact_cvar_risk_weight: 2.5
-    postimpact_severity_weight: 1.5
-    postimpact_rejoin_weight: 0.20
-    postimpact_yaw_rate_gate: 2.2
-    postimpact_adhesion_gate: 1.25
-    postimpact_risk_gate: 1.25
+    postimpact_rhombus_longitudinal_m: 6.0
+    postimpact_rhombus_lateral_m: 2.0
+    postimpact_ltr_limit: 0.9
+    postimpact_lane_width_m: 4.0
+    postimpact_Qy_diag: [20, 400, 1500, 0, 20000, 40000, 0, 0]
+    postimpact_Ru_scalar: 0.00005
+    postimpact_decision_mismatch_penalty: 10.0
+    # Paper Table III vehicle specifications.
+    postimpact_vehicle_mass: 1610.0
+    postimpact_vehicle_iz: 2059.0
+    postimpact_Lf_m: 1.05
+    postimpact_Lr_m: 1.61
+    postimpact_track_m: 1.565
+    # CG height is required only by the OC-RAP quasi-static LTR/load-transfer
+    # projection and is not reported in Table III; keep this adapter explicit.
+    postimpact_cg_height_m: 0.55
+    postimpact_tire_xi: 0.95
+    # Table I: lateral simplified Magic Formula fitted offline.
+    postimpact_magic_dy1: -6.233
+    postimpact_magic_dy2: 990.2
+    postimpact_magic_cy: 1.466
+    postimpact_magic_by: 0.1544
+    postimpact_magic_mu0: 1.0
+    # Eq. (32)/(33) and paper experiment settings.
+    postimpact_pso_particles: 500
+    postimpact_pso_iterations: 8
+    postimpact_pso_c1: 3.0
+    postimpact_pso_c2: 3.0
+    postimpact_pso_wmax: 0.9
+    postimpact_pso_wmin: 0.4
+    postimpact_pso_eps_x: 9.0
+    postimpact_pso_eps_y: 1.0
+    postimpact_pso_eps_m: 10.0
+    postimpact_pso_eps_steer: 1.0
+    postimpact_pso_residual_weight: 1.0
+    postimpact_pso_usage_tolerance: 0.02
+    postimpact_steer_max_rad: 0.55
+    postimpact_wheel_torque_max_nm: 2500.0
+    postimpact_wheel_radius_m: 0.347
+    postimpact_wheel_inertia_kgm2: 0.9
+    postimpact_pso_seed: 2023
 
-    # Lu et al. 2017 autonomous post-impact braking / stable stop.
-    stable_stop_terminal_speed_weight: 1.8
-    stable_stop_yaw_rate_weight: 2.0
-    stable_stop_yaw_acc_weight: 0.20
-    stable_stop_expected_risk_weight: 6.0
-    stable_stop_cvar_risk_weight: 3.0
-    stable_stop_steer_weight: 0.20
-    stable_stop_jerk_weight: 0.04
-    stable_stop_non_stop_macro_penalty: 2.0
-    stable_stop_utility_tiebreak: 0.03
-    stable_stop_terminal_speed_gate: 2.0
-    stable_stop_yaw_rate_gate: 1.4
-    stable_stop_risk_gate: 1.25
+    # Lu et al. 2017: Post-Impact Braking (PIB) autonomous branch.
+    # The SAE paper establishes autonomous braking up to ABS when the driver is
+    # not braking. WOMD has no brake-pedal intent, so OC-RAP explicitly tests
+    # that no-driver PIB branch. The 8 km/h and 2.5 s termination defaults come
+    # from the related Ford inventor patent family, not from the SAE abstract.
+    pib_abs_mu: 0.75
+    pib_abs_scale: 1.0
+    pib_max_decel_mps2: 9.0
+    pib_motion_stop_threshold_mps: 2.2222222222
+    pib_max_active_duration_s: 2.5
+    pib_min_abs_fraction: 0.55
+    pib_steer_scale_rad: 0.25
+    pib_steer_tiebreak_weight: 0.02
+    pib_positive_accel_tolerance_mps2: 0.25
+    pib_release_accel_tolerance_mps2: 0.8
 
-    # Wang et al. 2022 polynomial/APF motion planning + TVLQR tracking adapter.
-    tvlqr_lateral_weight: 1.2
-    tvlqr_heading_weight: 1.0
-    tvlqr_yaw_rate_weight: 1.5
-    tvlqr_yaw_acc_weight: 0.15
-    tvlqr_apf_risk_weight: 4.5
-    tvlqr_cvar_weight: 2.0
-    tvlqr_control_weight: 0.12
-    tvlqr_control_rate_weight: 0.05
-    tvlqr_progress_weight: 0.10
-    tvlqr_yaw_rate_gate: 2.2
-    tvlqr_risk_gate: 1.5
+    # Wang et al. 2022 quintic/APF motion planning + TVLQR + nonlinear tire
+    # allocation. Candidate trajectories are projected into the paper's quintic
+    # X/Y/yaw family before evaluating APF/stability/dynamics/tracking costs.
+    tvlqr_planning_horizon_steps: 37
+    tvlqr_mu: 0.9
+    tvlqr_vehicle_mass: 1610.0
+    tvlqr_vehicle_iz: 2059.0
+    tvlqr_Lf_m: 1.05
+    tvlqr_Lr_m: 1.61
+    tvlqr_track_m: 1.565
+    tvlqr_cg_height_m: 0.55
+    tvlqr_wheel_radius_m: 0.347
+    tvlqr_wheel_inertia_kgm2: 0.9
+    tvlqr_wheel_torque_max_nm: 2500.0
+    tvlqr_steer_max_rad: 0.55
+    tvlqr_tire_xi: 0.95
+    tvlqr_magic_mu0: 1.0
+    tvlqr_obstacle_safety_radius_m: 1.7
+    tvlqr_road_safety_distance_m: 1.0
+    tvlqr_road_half_width_m: 4.0
+    tvlqr_k1: 1.0
+    tvlqr_k2: 1.0
+    tvlqr_k3: 1.0
+    tvlqr_k4: 0.9
+    tvlqr_Q_diag: [5, 5, 90, 600000, 500000, 1000000]
+    tvlqr_R_diag: [0.0001, 0.0001, 0.0001]
+    tvlqr_dare_iterations: 12
+    tvlqr_allocation_eps: [9, 1, 10]
+    tvlqr_allocation_candidates: 192
+    tvlqr_allocation_refine_iterations: 4
+    tvlqr_allocation_seed: 2022
+    tvlqr_allocation_usage_tolerance: 0.02
+    tvlqr_tracking_cost_weight: 1.0e-6
+    tvlqr_allocation_residual_weight: 1.0
+    tvlqr_terminal_velocity_weight: 1.0
+    tvlqr_quintic_fit_weight: 1.0
+    tvlqr_quintic_fit_tolerance_m: 1.5
+    # Table 1 Magic Formula coefficients.
+    tvlqr_magic_Cy: 1.141
+    tvlqr_magic_b1: -5.98
+    tvlqr_magic_b2: 965.7
+    tvlqr_magic_b3: 2536.0
+    tvlqr_magic_b4: 2.071
+    tvlqr_magic_b5: 0.04436
+    tvlqr_magic_b6: -0.04443
+    tvlqr_magic_b7: 0.5792
+    tvlqr_magic_b8: -3.076
 
-    # Ghosh et al. 2026 heuristic steering/tractive-force restoration.
-    restoration_tau0: 0.1
-    restoration_tau1: 0.45
-    restoration_tau2: 0.65
-    restoration_tau3: 0.95
-    restoration_tauc1: 0.35
-    restoration_tauc2: 0.85
+    # Ghosh et al. 2026 open-loop steering + tractive-force restoration.
+    # Absolute paper time constants are preserved. Table 2 reports K1 but does
+    # not define/report A2 required by Eq. (16); v57 therefore keeps A2=0 by
+    # default rather than silently inventing K1->A2 semantics.
+    restoration_vehicle_mass_kg: 1750.0
     restoration_A1: 0.175
-    restoration_A2: -0.10
-    restoration_accel_pulse: 0.9
-    restoration_kdir: 1.0
-    restoration_shape_weight: 0.8
-    restoration_yaw_rate_weight: 1.1
-    restoration_lateral_weight: 0.25
-    restoration_expected_risk_weight: 4.0
-    restoration_cvar_risk_weight: 2.0
-    restoration_speed_preservation_weight: 2.0
-    restoration_min_speed_fraction: 0.45
-    restoration_admit_min_speed_fraction: 0.30
-    restoration_adhesion_weight: 0.75
-    restoration_utility_weight: 0.25
-    restoration_yaw_rate_gate: 2.2
-    restoration_risk_gate: 1.5
+    restoration_A2: 0.0
+    restoration_Ac_N: 900.0
+    restoration_case1_Kdir_abs: 0.2
+    restoration_case2_Kdir_abs: 0.5
+    restoration_case1_tau0_s: 1.0
+    restoration_case1_tau1_s: 3.0
+    restoration_case2_tau0_s: 1.0
+    restoration_case2_tau1_s: 5.195
+    restoration_tau2_s: 10.0
+    restoration_tau3_s: 11.0
+    restoration_tauc1_s: 5.443
+    restoration_tauc2_s: 10.0
+    # Case selection is not supplied as an observable label by WOMD; this is a
+    # documented benchmark adapter based only on observed initial yaw rate.
+    restoration_case2_yaw_rate_threshold_radps: 0.10
+    restoration_steer_scale_floor_rad: 0.02
+    restoration_force_fit_weight: 0.25
+    restoration_brake_tolerance_mps2: 0.75
 
-    # Cao et al. 2021 FCC-MPC via AFS + differential torque vectoring.
-    comp_mpc_lateral_weight: 1.4
-    comp_mpc_heading_weight: 1.1
-    comp_mpc_yaw_rate_weight: 1.5
-    comp_mpc_yaw_acc_weight: 0.12
-    comp_mpc_control_weight: 0.16
-    comp_mpc_control_rate_weight: 0.05
-    comp_mpc_adhesion_weight: 1.0
-    comp_mpc_expected_risk_weight: 4.0
-    comp_mpc_cvar_weight: 2.0
-    comp_mpc_utility_weight: 0.10
-    comp_mpc_yaw_rate_gate: 2.2
-    comp_mpc_risk_gate: 1.5
+    # Cao et al. 2021 FCC-MPC. Reliable online primary material exposes the
+    # architecture/mechanisms but not the full equations/weights. These values
+    # are explicitly benchmark-adapter parameters, not paper-reported numbers.
+    # Upload the full paper/source for an equation-exact second-pass port.
+    comp_mpc_fcc_yaw_mix_s: 0.8
+    comp_mpc_fcc_initial_steps: 5
+    comp_mpc_constraint_decay_rate: 1.25
+    comp_mpc_beta_limit_rad: 0.12
+    comp_mpc_yaw_rate_limit_radps: 0.80
+    comp_mpc_steer_max_rad: 0.55
+    comp_mpc_steer_rate_max_radps: 1.5
+    comp_mpc_slip_ratio_limit: 0.20
+    comp_mpc_mu: 0.85
+    comp_mpc_tracking_y_weight: 1.0
+    comp_mpc_tracking_heading_weight: 0.7
+    comp_mpc_tracking_yaw_rate_weight: 1.0
+    comp_mpc_tracking_sideslip_weight: 0.8
+    comp_mpc_fcc_weight: 1.0
+    comp_mpc_constraint_tolerance: 1.0e-8
 
-    # Ao et al. 2022 sliding-mode + fault-tolerant convex-QP allocation.
-    robust_pic_lambda_y: 0.8
-    robust_pic_lambda_heading: 0.7
-    robust_pic_adhesion_target: 0.9
-    robust_pic_surface_y_weight: 1.4
-    robust_pic_surface_heading_weight: 1.6
-    robust_pic_yaw_rate_weight: 1.2
-    robust_pic_adhesion_weight: 1.2
-    robust_pic_control_rate_weight: 0.08
-    robust_pic_expected_risk_weight: 4.5
-    robust_pic_cvar_weight: 2.5
-    robust_pic_adhesion_gate: 1.30
-    robust_pic_risk_gate: 1.5
+    # Ao et al. 2022: exact published upper sliding surface/reaching law and
+    # low-level fault-tolerant quadratic allocation, projected onto common
+    # executable candidates. Source Tables 1/2 parameters follow below.
+    robust_pic_vehicle_mass_kg: 1270.0
+    robust_pic_vehicle_iz_kgm2: 1536.7
+    robust_pic_a_m: 1.015
+    robust_pic_b_m: 1.895
+    robust_pic_wheel_radius_m: 0.325
+    robust_pic_track_m: 1.675
+    robust_pic_cornering_front_Nprad: 50000.0
+    robust_pic_cornering_rear_Nprad: 65000.0
+    robust_pic_mu: 0.85
+    robust_pic_c1: 0.6
+    robust_pic_c2: 1.0
+    robust_pic_k1: 0.25
+    robust_pic_k2: 0.005
+    robust_pic_qp_xi: 0.5
+    # WOMD has no IWM fault diagnosis. Healthy motors are the fair default; a
+    # supplied fault vector exercises the exact same source QP.
+    robust_pic_fault_factors: [0.0, 0.0, 0.0, 0.0]
+    # Source constrains |u_ij| by motor torque limits but does not publish a
+    # uniquely reusable numerical limit in the accessible controller section.
+    # This is an explicit benchmark actuator-interface parameter.
+    robust_pic_wheel_torque_max_nm: 1600.0
+    # Boundary layer replaces sign(s) only to suppress numerical chattering on
+    # the 100 ms candidate grid; the source law itself is Eq. (22).
+    robust_pic_boundary_layer: 0.02
+    robust_pic_allocation_residual_scale: 300.0
+    robust_pic_allocation_residual_tolerance: 1200.0
+    robust_pic_speed_preservation_weight: 0.25
+    robust_pic_allocation_weight: 1.0
   training:
     validate_dataset: true
     device: cpu

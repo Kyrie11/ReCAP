@@ -17,8 +17,14 @@ source scripts/lib/v50_runtime.sh
 : "${RUN_SAFE:=1}"
 : "${RUN_NEAR:=1}"
 : "${RUN_CONTACT:=1}"
+: "${RUN_LEGACY_SAFE:=false}"
+: "${RUN_LEGACY_NEAR:=false}"
+: "${RUN_LEGACY_CONTACT:=false}"
 : "${DO_TRAIN_SAFE:=true}"       # train only missing/invalid learned checkpoints
 : "${DO_TRAIN_NEAR:=true}"
+: "${DO_TRAIN_CONTACT:=true}"
+: "${DO_CALIBRATE_NEAR:=true}"
+: "${FORCE_RECALIBRATE_NEAR:=false}"
 : "${FORCE_RETRAIN_ALL:=false}"
 : "${DO_OFFLINE:=true}"
 : "${DO_CLOSED_LOOP:=true}"
@@ -104,20 +110,21 @@ run_regime() {
     safe)
       if env "${common[@]}" RUN="$OUT/safe" DO_TRAIN="$DO_TRAIN_SAFE" \
         FORCE_RETRAIN_SAFE="$FORCE_RETRAIN_ALL" CHECKPOINT_ROOT="$SAFE_CHECKPOINT_ROOT" \
-        CL_WOMD="$SAFE_CL_WOMD" CL_RENDER_TRACE=false \
+        RUN_LEGACY_SAFE="$RUN_LEGACY_SAFE" CL_WOMD="$SAFE_CL_WOMD" CL_RENDER_TRACE=false \
         bash scripts/run_safe_regime_external_baselines.sh \
         > >(tee "$OUT/safe.launcher.log") 2>&1; then rc=0; else rc=$?; fi
       ;;
     near)
-      if env "${common[@]}" RUN="$OUT/near" TRAIN_GAMEFORMER_IF_MISSING="$DO_TRAIN_NEAR" \
-        FORCE_RETRAIN_GAMEFORMER="$FORCE_RETRAIN_ALL" CHECKPOINT_ROOT="$NEAR_CHECKPOINT_ROOT" \
-        RUN_ORACLE_CLOSED_LOOP="$RUN_ORACLE_CLOSED_LOOP" CL_WOMD="$NEAR_CL_WOMD" \
+      if env "${common[@]}" RUN="$OUT/near" DO_TRAIN="$DO_TRAIN_NEAR" \
+        DO_CALIBRATE="$DO_CALIBRATE_NEAR" FORCE_RECALIBRATE="$FORCE_RECALIBRATE_NEAR" \
+        RUN_ORACLE_CLOSED_LOOP="$RUN_ORACLE_CLOSED_LOOP" RUN_LEGACY_NEAR="$RUN_LEGACY_NEAR" CL_WOMD="$NEAR_CL_WOMD" \
         USE_DYNAMIC_SCHEDULER="$USE_DYNAMIC_SCHEDULER" \
         bash scripts/run_near_contact_external_baselines_2gpu_optimized.sh \
         > >(tee "$OUT/near.launcher.log") 2>&1; then rc=0; else rc=$?; fi
       ;;
     contact)
-      if env "${common[@]}" RUN="$OUT/contact" CL_WOMD="$CONTACT_CL_WOMD" \
+      if env "${common[@]}" RUN="$OUT/contact" DO_TRAIN="$DO_TRAIN_CONTACT" CL_WOMD="$CONTACT_CL_WOMD" \
+        RUN_LEGACY_CONTACT="$RUN_LEGACY_CONTACT" USE_DYNAMIC_SCHEDULER="$USE_DYNAMIC_SCHEDULER" \
         bash scripts/run_contact_external_baselines.sh \
         > >(tee "$OUT/contact.launcher.log") 2>&1; then rc=0; else rc=$?; fi
       ;;

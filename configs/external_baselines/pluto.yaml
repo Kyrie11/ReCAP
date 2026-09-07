@@ -6,46 +6,56 @@ external_baselines:
   allow_teacher_supervision: false
   model:
     arch: pluto
+    implementation: source_port_v54
     max_candidates: 24
-    d_model: 192
+    # Uploaded PLUTO model config: dim=128, encoder/decoder depth=4,
+    # heads=4, modes=12, dropout=0.1, state_dropout=0.75, radius=120 m.
+    d_model: 128
     num_layers: 4
-    num_heads: 8
+    decoder_depth: 4
+    num_heads: 4
     dropout: 0.10
+    state_dropout: 0.75
+    num_modes: 12
+    radius: 120.0
     history_len: 11
-    neighbors_to_predict: 8
     future_len: 20
-    num_topology_agents: 16
-    actor_topology_feature_dim: 16
-    num_topology_map: 64
-    map_topology_feature_dim: 14
-    lateral_queries: 5
-    longitudinal_queries: 5
-    contrastive_temperature: 0.10
+    neighbors_to_predict: 15
+    source_max_agents: 16
+    source_map_polygons: 64
+    source_map_points: 20
   training:
     sdpa_backend: safe
     amp_dtype: auto
     device: auto
     distributed: auto
-    batch_size: 64
+    batch_size: 48
     num_workers: 8
     epochs: 25
-    lr: 0.0002
+    lr: 0.001
     weight_decay: 0.0001
+    scheduler: warmup_cosine
+    warmup_epochs: 3
     grad_clip: 5.0
     tqdm: true
     pin_memory: true
+    persistent_workers: true
+    prefetch_factor: 2
+    fused_optimizer: true
     find_unused_parameters: false
   loss_weights:
-    policy: 1.0
+    policy: 0.25
     levelk: 0.0
     level_response: 0.0
     topology: 0.0
     gameformer_traj: 0.0
-    pluto_contrastive: 0.35
+    plantf_native: 0.0
+    pluto_native: 1.0
+    # Public PLUTO trainer defaults use_contrast_loss=False. Do not fabricate
+    # CIL from ordinary OC-RAP candidates without the source triplet augmentation.
+    pluto_contrastive: 0.0
     utility: 0.0
     hard: 0.0
     harm: 0.0
     oracle_rec: 0.0
     deploy_rec: 0.0
-  policy:
-    pluto_contrastive_selection_weight: 0.15

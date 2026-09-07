@@ -198,6 +198,15 @@ def _forward_model(model: torch.nn.Module, batch: dict[str, torch.Tensor], cfg: 
         actor_topology_mask=batch.get("actor_topology_mask", None),
         map_topology_features=batch.get("map_topology_features", None),
         map_topology_mask=batch.get("map_topology_mask", None),
+        source_agent_history=batch.get("source_agent_history", None),
+        source_agent_valid=batch.get("source_agent_valid", None),
+        source_current_state=batch.get("source_current_state", None),
+        source_map_points=batch.get("source_map_points", None),
+        source_map_point_valid=batch.get("source_map_point_valid", None),
+        source_map_meta=batch.get("source_map_meta", None),
+        source_map_center=batch.get("source_map_center", None),
+        source_map_valid=batch.get("source_map_valid", None),
+        source_centerline=batch.get("source_centerline", None),
     )
 
 
@@ -208,7 +217,58 @@ def _zero_loss(out: dict[str, torch.Tensor]) -> torch.Tensor:
     return torch.nan_to_num(out["logits"].float(), nan=0.0, posinf=0.0, neginf=0.0).sum() * 0.0
 
 
+def _target_prefix(batch: dict[str, torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor]:
+    gt = batch["prefix_traj"].float()
+    valid = batch.get("prefix_valid", torch.ones_like(gt[..., 0])).bool()
+    B, N, T, _ = gt.shape
+    idx = batch["target_index"].long().clamp(0, N - 1)
+    b = torch.arange(B, device=gt.device)
+    return gt[b, idx], valid[b, idx]
+
+
+def _xy_heading_target(gt_xy: torch.Tensor) -> torch.Tensor:
+    origin = torch.zeros_like(gt_xy[:, :1])
+    prev = torch.cat([origin, gt_xy[:, :-1]], dim=1)
+    d = gt_xy - prev
+    moving = d.square().sum(dim=-1) > 1.0e-8
+    dx = torch.where(moving, d[..., 0], torch.ones_like(d[..., 0]))
+    dy = torch.where(moving, d[..., 1], torch.zeros_like(d[..., 1]))
+    h = torch.atan2(dy, dx)
+    return torch.cat([gt_xy, h.cos()[..., None], h.sin()[..., None]], dim=-1)
+
+
+def _gameformer_source_loss(out: dict[str, torch.Tensor], batch: dict[str, torch.Tensor]) -> torch.Tensor:
+    traj_levels = out.get("gameformer_ego_level_trajs")
+    score_levels = out.get("gameformer_ego_level_scores")
+    if not isinstance(traj_levels, list) or not isinstance(score_levels, list) or "prefix_traj" not in batch:
+        return _zero_loss(out)
+    gt, valid = _target_prefix(batch)
+    losses: list[torch.Tensor] = []
+    with torch.autocast(device_type=gt.device.type, enabled=False):
+        gt = gt.float()
+        for traj, scores in zip(traj_levels, score_levels):
+            tr = traj.float()
+            T = min(tr.shape[-2], gt.shape[-2])
+            pred, log_sigma = tr[..., :T, :2], tr[..., :T, 2:4].clamp(-5.0, 3.0)
+            target = gt[:, None, :T]
+            vm = valid[:, None, :T] & torch.isfinite(target).all(dim=-1)
+            safe_pred = torch.where(vm[..., None], pred, torch.zeros_like(pred))
+            safe_target = torch.where(vm[..., None], target, torch.zeros_like(target))
+            safe_ls = torch.where(vm[..., None], log_sigma, torch.zeros_like(log_sigma))
+            inv_var = torch.exp((-2.0 * safe_ls).clamp(-6.0, 10.0))
+            point = 0.5 * ((safe_pred - safe_target).square() * inv_var).sum(-1) + safe_ls.sum(-1)
+            mode_nll = torch.where(vm, point, torch.zeros_like(point)).sum(-1) / vm.float().sum(-1).clamp_min(1.0)
+            best = mode_nll.argmin(dim=-1)
+            b = torch.arange(gt.shape[0], device=gt.device)
+            reg = mode_nll[b, best].mean()
+            cls = F.cross_entropy(scores.float(), best.detach())
+            losses.append(reg + cls)
+    return torch.stack(losses).mean() if losses else _zero_loss(out)
+
+
 def _gameformer_traj_loss(out: dict[str, torch.Tensor], batch: dict[str, torch.Tensor]) -> torch.Tensor:
+    if "gameformer_ego_level_trajs" in out:
+        return _gameformer_source_loss(out, batch)
     """Numerically-stable best-of-M Gaussian trajectory loss.
 
     GameFormer's heteroscedastic trajectory NLL is much more sensitive to AMP
@@ -269,6 +329,100 @@ def _gameformer_traj_loss(out: dict[str, torch.Tensor], batch: dict[str, torch.T
             losses.append(reg + 0.25 * cls)
     return torch.stack(losses).mean() if losses else _zero_loss(out)
 
+def _plantf_native_loss(out: dict[str, torch.Tensor], batch: dict[str, torch.Tensor]) -> torch.Tensor:
+    traj, prob = out.get("plantf_trajectory"), out.get("plantf_probability")
+    if not torch.is_tensor(traj) or not torch.is_tensor(prob) or "prefix_traj" not in batch:
+        return _zero_loss(out)
+    gt_xy, valid = _target_prefix(batch)
+    target = _xy_heading_target(gt_xy.float())
+    T = min(traj.shape[-2], target.shape[-2])
+    pred = traj[..., :T, :4].float()
+    target = target[:, None, :T]
+    vm = valid[:, None, :T]
+    ade = torch.linalg.norm(pred[..., :2] - target[..., :2], dim=-1)
+    ade = torch.where(vm, ade, torch.zeros_like(ade)).sum(-1) / vm.float().sum(-1).clamp_min(1.0)
+    best = ade.argmin(-1)
+    b = torch.arange(pred.shape[0], device=pred.device)
+    best_traj = pred[b, best]
+    reg = F.smooth_l1_loss(best_traj, target[:, 0], reduction="none").mean(dim=-1)
+    reg = (reg * valid[:, :T].float()).sum() / valid[:, :T].float().sum().clamp_min(1.0)
+    cls = F.cross_entropy(prob.float(), best.detach())
+    return reg + cls
+
+
+def _pluto_native_loss(out: dict[str, torch.Tensor], batch: dict[str, torch.Tensor], cfg: dict[str, Any]) -> torch.Tensor:
+    traj, prob = out.get("pluto_trajectory"), out.get("pluto_probability")
+    if not torch.is_tensor(traj) or not torch.is_tensor(prob) or "prefix_traj" not in batch:
+        return _zero_loss(out)
+    gt_xy, valid = _target_prefix(batch)
+    target4 = _xy_heading_target(gt_xy.float())
+    # PLUTO regresses x,y,cos(yaw),sin(yaw),vx,vy.  Velocity is computed from
+    # the observable logged target at 10 Hz; this uses no future beyond the
+    # executable prefix already used for imitation supervision.
+    origin = torch.zeros_like(gt_xy[:, :1])
+    vel = (gt_xy - torch.cat([origin, gt_xy[:, :-1]], dim=1)) / 0.1
+    target = torch.cat([target4, vel], dim=-1)
+    B, R, M, Tpred, _ = traj.shape
+    target_ref = batch["target_index"].long().clamp(0, R - 1)
+    # In the public trainer, mode = longitudinal future_projection / (radius/M).
+    # When the logged executable target itself is the reference line, its endpoint
+    # arc length is the corresponding source quantity.
+    seg = torch.linalg.norm(gt_xy[:, 1:] - gt_xy[:, :-1], dim=-1)
+    arc = seg.sum(dim=-1)
+    bcfg = (cfg.get("external_baselines", {}) or {})
+    mcfg = (bcfg.get("model", {}) or {})
+    radius = float(mcfg.get("radius", mcfg.get("pluto_radius_m", 120.0)))
+    interval = radius / max(M, 1)
+    target_mode = (arc / max(interval, 1.0e-3)).long().clamp(0, M - 1)
+    b = torch.arange(B, device=traj.device)
+    best = traj[b, target_ref, target_mode].float()
+    T = min(Tpred, target.shape[1])
+    reg = F.smooth_l1_loss(best[:, :T], target[:, :T], reduction="none").sum(-1)
+    reg = (reg * valid[:, :T].float()).sum() / valid[:, :T].float().sum().clamp_min(1.0)
+    flat_prob = prob.float().reshape(B, R * M)
+    label = target_ref * M + target_mode
+    cls = F.cross_entropy(flat_prob, label.detach())
+    return reg + cls
+
+
+
+def _wayformer_native_loss(out: dict[str, torch.Tensor], batch: dict[str, torch.Tensor]) -> torch.Tensor:
+    """Source/paper hard-assignment bivariate-GMM loss for Wayformer.
+
+    Wayformer assigns the logged trajectory to the mode whose *mean trajectory*
+    is nearest, applies bivariate-Gaussian NLL only to that mode, and adds a mode
+    classification cross-entropy.  v57/v58-first-pass used a mixture marginal
+    NLL, which changes the mode-specialisation objective.
+    """
+    params = out.get("wayformer_mode_params")
+    scores = out.get("wayformer_mode_logits")
+    if not torch.is_tensor(params) or not torch.is_tensor(scores) or "prefix_traj" not in batch:
+        return _zero_loss(out)
+    gt, valid = _target_prefix(batch)
+    B, Q, Tm, _ = params.shape
+    if gt.shape[1] != Tm:
+        gt = F.interpolate(gt.permute(0, 2, 1), size=Tm, mode="linear", align_corners=True).permute(0, 2, 1)
+        valid = F.interpolate(valid.float().unsqueeze(1), size=Tm, mode="nearest").squeeze(1) > 0.5
+    mu = params[..., :2].float()
+    vm = valid[:, None, :].float()
+    distance = (torch.linalg.norm(mu - gt[:, None], dim=-1) * vm).sum(dim=-1)
+    nearest = distance.argmin(dim=-1)
+    b = torch.arange(B, device=params.device)
+    chosen = params[b, nearest].float()
+    diff = gt - chosen[..., :2]
+    log_sx = chosen[..., 2].clamp(-1.609, 5.0)
+    log_sy = chosen[..., 3].clamp(-1.609, 5.0)
+    sx, sy = torch.exp(log_sx), torch.exp(log_sy)
+    rho = chosen[..., 4].clamp(-0.5, 0.5)
+    one_m = (1.0 - rho.square()).clamp_min(1.0e-4)
+    dx, dy = diff[..., 0], diff[..., 1]
+    coeff = log_sx + log_sy + 0.5 * torch.log(one_m)
+    expo = 0.5 / one_m * ((dx / sx).square() + (dy / sy).square() - 2.0 * rho * dx * dy / (sx * sy))
+    reg = ((coeff + expo) * valid.float()).sum(dim=-1)
+    cls = F.cross_entropy(scores.float(), nearest.detach(), reduction="none")
+    return (reg + cls).mean()
+
+
 def _focal_topk_loss(logits: torch.Tensor, target: torch.Tensor, valid: torch.Tensor, *, top_k_ratio: float = 0.25) -> torch.Tensor:
     # logits [B,N,K,1] or [B,N,K]; target/valid [B,N,K]
     if logits.dim() == target.dim() + 1:
@@ -290,7 +444,11 @@ def _focal_topk_loss(logits: torch.Tensor, target: torch.Tensor, valid: torch.Te
     flat = flat.masked_fill(~vflat, -1.0)
     vals = torch.topk(flat, k=min(k, flat.shape[-1]), dim=-1).values
     vals = vals.clamp_min(0.0)
-    denom = (vals > 0).float().sum(dim=-1).clamp_min(1.0)
+    # Official BeTop normalizes the mined loss by the number of *valid graph
+    # edges before top-k mining*, not by the number of positive selected losses.
+    # This matters most in sparse topology batches where v57 over-weighted the
+    # few hard edges.
+    denom = vflat.float().sum(dim=-1).clamp_min(1.0)
     return (vals.sum(dim=-1) / denom).mean()
 
 def _loss_dict(out: dict[str, torch.Tensor], batch: dict[str, torch.Tensor], cfg: dict[str, Any]) -> dict[str, torch.Tensor]:
@@ -299,8 +457,8 @@ def _loss_dict(out: dict[str, torch.Tensor], batch: dict[str, torch.Tensor], cfg
     This is both a correctness and a speed fix.  The old code evaluated every
     auxiliary loss and multiplied it by its weight afterwards.  IEEE floating
     point makes ``0 * NaN`` equal NaN, so an inactive auxiliary head could poison
-    the total objective.  It also wasted substantial work for PlanTF/PDM-Hybrid,
-    whose objectives are policy-only in the shipped configs.
+    the total objective.  It also wasted substantial work for adapter variants whose inactive
+    auxiliary heads are deliberately disabled in the shipped configs.
     """
     bcfg = cfg.get("external_baselines", {}) if isinstance(cfg.get("external_baselines", {}), dict) else {}
     lw = bcfg.get("loss_weights", {}) if isinstance(bcfg.get("loss_weights", {}), dict) else {}
@@ -310,7 +468,7 @@ def _loss_dict(out: dict[str, torch.Tensor], batch: dict[str, torch.Tensor], cfg
 
     defaults = {
         "policy": 1.0, "levelk": 0.35, "level_response": 0.10,
-        "topology": 0.0, "gameformer_traj": 0.25, "pluto_contrastive": 0.0,
+        "topology": 0.0, "wayformer_native": 0.0, "gameformer_traj": 0.25, "plantf_native": 0.0, "pluto_native": 0.0, "pluto_contrastive": 0.0,
         "utility": 0.10, "hard": 0.50, "harm": 0.25,
         "oracle_rec": 0.50, "deploy_rec": 0.25,
     }
@@ -347,7 +505,10 @@ def _loss_dict(out: dict[str, torch.Tensor], batch: dict[str, torch.Tensor], cfg
     losses["loss_harm"] = _masked_mse(out["harm"].float(), batch["harm"].float(), mask) if active("harm") else zero
     losses["loss_oracle_rec"] = _masked_mse(out["r_orc"].float(), batch["r_orc"].float(), mask) if active("oracle_rec") else zero
     losses["loss_deploy_rec"] = _masked_mse(out["r_dep"].float(), batch["r_dep"].float(), mask) if active("deploy_rec") else zero
+    losses["loss_wayformer_native"] = _wayformer_native_loss(out, batch) if active("wayformer_native") else zero
     losses["loss_gameformer_traj"] = _gameformer_traj_loss(out, batch) if active("gameformer_traj") else zero
+    losses["loss_plantf_native"] = _plantf_native_loss(out, batch) if active("plantf_native") else zero
+    losses["loss_pluto_native"] = _pluto_native_loss(out, batch, cfg) if active("pluto_native") else zero
 
     pluto_logits = out.get("pluto_contrastive_logits")
     losses["loss_pluto_contrastive"] = (
@@ -389,7 +550,8 @@ def _loss_dict(out: dict[str, torch.Tensor], batch: dict[str, torch.Tensor], cfg
 
     key_map = {
         "policy": "loss_policy", "levelk": "loss_levelk", "level_response": "loss_level_response",
-        "topology": "loss_topology", "gameformer_traj": "loss_gameformer_traj",
+        "topology": "loss_topology", "wayformer_native": "loss_wayformer_native", "gameformer_traj": "loss_gameformer_traj",
+        "plantf_native": "loss_plantf_native", "pluto_native": "loss_pluto_native",
         "pluto_contrastive": "loss_pluto_contrastive", "utility": "loss_utility",
         "hard": "loss_hard", "harm": "loss_harm", "oracle_rec": "loss_oracle_rec",
         "deploy_rec": "loss_deploy_rec",
@@ -486,6 +648,82 @@ def _model_state(model: torch.nn.Module) -> dict[str, torch.Tensor]:
     return module.state_dict()
 
 
+def _source_adamw_param_groups(model: torch.nn.Module, weight_decay: float) -> list[dict[str, Any]]:
+    """Mirror the PlanTF/PLUTO AdamW decay/no-decay split.
+
+    The uploaded trainers decay Linear/Conv/MHA/RNN weights but exclude biases,
+    normalizations, embeddings, and free positional/query parameters. GroupNorm
+    is additionally excluded because this dependency-light port uses it where
+    the source NATTEN stack used normalization layers.
+    """
+    module = model.module if isinstance(model, DDP) else model
+    decay: set[str] = set()
+    no_decay: set[str] = set()
+    whitelist = (torch.nn.Linear, torch.nn.Conv1d, torch.nn.Conv2d, torch.nn.Conv3d,
+                 torch.nn.MultiheadAttention, torch.nn.LSTM, torch.nn.GRU)
+    blacklist = (torch.nn.BatchNorm1d, torch.nn.BatchNorm2d, torch.nn.BatchNorm3d,
+                 torch.nn.SyncBatchNorm, torch.nn.LayerNorm, torch.nn.GroupNorm, torch.nn.Embedding)
+    for module_name, submodule in module.named_modules():
+        for param_name, _param in submodule.named_parameters(recurse=False):
+            full = f"{module_name}.{param_name}" if module_name else param_name
+            if "bias" in param_name:
+                no_decay.add(full)
+            elif "weight" in param_name:
+                if isinstance(submodule, whitelist):
+                    decay.add(full)
+                elif isinstance(submodule, blacklist):
+                    no_decay.add(full)
+                else:
+                    # Adapter-only modules should fail conservative: no decay is
+                    # less intrusive than inventing a source regularizer.
+                    no_decay.add(full)
+            else:
+                no_decay.add(full)
+    params = dict(module.named_parameters())
+    overlap = decay & no_decay
+    if overlap:
+        raise RuntimeError(f"optimizer decay partition overlap: {sorted(overlap)[:8]}")
+    missing = set(params) - (decay | no_decay)
+    if missing:
+        no_decay.update(missing)
+    return [
+        {"params": [params[n] for n in sorted(decay)], "weight_decay": float(weight_decay)},
+        {"params": [params[n] for n in sorted(no_decay)], "weight_decay": 0.0},
+    ]
+
+
+def _make_epoch_scheduler(opt: torch.optim.Optimizer, tcfg: dict[str, Any], epochs: int):
+    name = str(tcfg.get("scheduler", "none")).strip().lower()
+    if name in {"", "none", "off", "false"}:
+        return None
+    if name in {"multistep", "multi_step"}:
+        milestones = [int(x) for x in tcfg.get("milestones", [20, 22, 24, 26, 28])]
+        gamma = float(tcfg.get("scheduler_gamma", 0.5))
+        return torch.optim.lr_scheduler.MultiStepLR(opt, milestones=milestones, gamma=gamma)
+    if name in {"linear", "linear_decay"}:
+        total = max(1, int(epochs))
+        min_factor = float(tcfg.get("min_lr_factor", 0.0))
+        min_factor = min(max(min_factor, 0.0), 1.0)
+        def lr_lambda(ep: int) -> float:
+            # Epoch-level projection of Wayformer's source linear decay.
+            frac = min(max(float(ep) / float(max(total - 1, 1)), 0.0), 1.0)
+            return max(min_factor, 1.0 - frac * (1.0 - min_factor))
+        return torch.optim.lr_scheduler.LambdaLR(opt, lr_lambda=lr_lambda)
+    if name in {"warmup_cosine", "warmup_cos"}:
+        warmup = max(1, int(tcfg.get("warmup_epochs", 3)))
+        total = max(warmup + 1, int(epochs))
+        min_lr = float(tcfg.get("min_lr", 1.0e-6))
+        base_lr = float(tcfg.get("lr", 1.0e-3))
+        def lr_lambda(ep: int) -> float:
+            if ep < warmup:
+                return float(ep + 1) / float(warmup)
+            frac = float(ep - warmup) / float(max(total - warmup, 1))
+            lr = min_lr + 0.5 * (base_lr - min_lr) * (1.0 + math.cos(math.pi * frac))
+            return lr / max(base_lr, 1.0e-12)
+        return torch.optim.lr_scheduler.LambdaLR(opt, lr_lambda=lr_lambda)
+    raise ValueError(f"Unknown external_baselines.training.scheduler={name!r}")
+
+
 def train_external_baseline(dataset: str, output: str, cfg: dict[str, Any], *, val_dataset: str | None = None, baseline: str | None = None) -> dict[str, Any]:
     deterministic = {
         "marc", "marc_lite", "marc_contingency",
@@ -497,7 +735,7 @@ def train_external_baseline(dataset: str, output: str, cfg: dict[str, Any], *, v
         "robust_scenario_mpc", "scenario_mpc", "batkovic_scenario_mpc",
         "dr_cvar_safety_filter", "distributionally_robust_cvar_filter", "safaoui_dr_cvar_filter",
         "conformal_predictive_safety_filter", "conformal_safety_filter", "cpsf",
-        "pdm_closed", "pdm_closed_adapter", "idm", "idm_planner",
+        "pdm_closed", "pdm_closed_adapter", "pdm_hybrid", "pdm_hybrid_adapter", "idm", "idm_planner",
         "oracle_filter", "oracle_recovery_filter", "branchwise_oracle_filter", "oracle_branchwise_recovery",
         "postimpact_mpc", "postimpact_mpc_lite", "post_impact_mpc_lite", "postimpact_mpc_paper", "integrated_postimpact_mpc",
         "post_crash_braking", "post_crash_braking_rule", "stable_stop", "stable_stop_rule", "postcrash_stable_stop",
@@ -583,11 +821,14 @@ def train_external_baseline(dataset: str, output: str, cfg: dict[str, Any], *, v
         opt_kwargs = {"lr": float(tcfg.get("lr", 2.0e-4)), "weight_decay": float(tcfg.get("weight_decay", 1.0e-4))}
         if device.type == "cuda" and bool(tcfg.get("fused_optimizer", True)):
             opt_kwargs["fused"] = True
+        impl = str(((bcfg.get("model", {}) or {}).get("implementation", bcfg.get("implementation", "")))).lower()
+        source_decay_split = impl in {"source_port", "source_port_v54", "sourceported_v54"} and baseline_name.lower() in {"plantf", "plan_tf", "plantf_adapter", "pluto", "pluto_adapter"}
+        opt_params = _source_adamw_param_groups(model, float(opt_kwargs["weight_decay"])) if source_decay_split else model.parameters()
         try:
-            opt = torch.optim.AdamW(model.parameters(), **opt_kwargs)
+            opt = torch.optim.AdamW(opt_params, **opt_kwargs)
         except (TypeError, RuntimeError):
             opt_kwargs.pop("fused", None)
-            opt = torch.optim.AdamW(model.parameters(), **opt_kwargs)
+            opt = torch.optim.AdamW(opt_params, **opt_kwargs)
         amp_enabled = bool(tcfg.get("amp", True)) and device.type == "cuda"
         use_scaler = amp_enabled and effective_amp_dtype == torch.float16
         try:
@@ -616,6 +857,7 @@ def train_external_baseline(dataset: str, output: str, cfg: dict[str, Any], *, v
         train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=(train_sampler is None), sampler=train_sampler, collate_fn=_collate, **loader_kwargs)
         val_loader = DataLoader(val_ds, batch_size=batch_size, shuffle=False, sampler=val_sampler, collate_fn=_collate, **loader_kwargs)
         epochs = int(tcfg.get("epochs", 10))
+        scheduler = _make_epoch_scheduler(opt, tcfg, epochs)
         best_val = float("inf")
         best_epoch = 0
         history = []
@@ -623,10 +865,13 @@ def train_external_baseline(dataset: str, output: str, cfg: dict[str, Any], *, v
         for ep in range(1, epochs + 1):
             if train_sampler is not None:
                 train_sampler.set_epoch(ep)
+            lr_used = float(opt.param_groups[0]["lr"])
             tr = _epoch(model, train_loader, opt, device, cfg, train=True, rank=rank, epoch=ep, scaler=scaler, amp_dtype=effective_amp_dtype)
             with torch.no_grad():
                 va = _epoch(model, val_loader, None, device, cfg, train=False, rank=rank, epoch=ep, scaler=None, amp_dtype=effective_amp_dtype)
-            row = {"epoch": ep, "train": tr, "val": va}
+            row = {"epoch": ep, "lr": lr_used, "train": tr, "val": va}
+            if scheduler is not None:
+                scheduler.step()
             if rank == 0:
                 history.append(row)
                 ckpt = {
@@ -645,12 +890,14 @@ def train_external_baseline(dataset: str, output: str, cfg: dict[str, Any], *, v
                     "history_len": int(getattr(train_ds, "history_len", 0)),
                     "neighbors_to_predict": int(getattr(train_ds, "neighbors_to_predict", 0)),
                     "future_len": int(getattr(train_ds, "future_len", 0)),
+                    "implementation_version": str((((cfg.get("external_baselines", {}) or {}).get("model", {}) or {}).get("implementation", "legacy_adapter"))),
                     "input_contract": {
-                        "version": 2,
+                        "version": 3,
                         "use_teacher_branch_context": bool(use_teacher_branch_context(cfg)),
                         "deployable_feature_only": bool(not use_teacher_branch_context(cfg)),
                         "coordinate_frame": "current_ego_relative",
                         "selection_supervision": str((cfg.get("external_baselines", {}) or {}).get("supervision_target", "logged_nominal")),
+                        "source_scene_observation_only": True,
                     },
                     "model_state": _model_state(model),
                     "epoch": int(ep),
@@ -697,6 +944,9 @@ def train_external_baseline(dataset: str, output: str, cfg: dict[str, Any], *, v
             "amp_dtype": str(effective_amp_dtype).replace("torch.", ""),
             "cuda_runtime": runtime_info,
             "fused_optimizer": bool(opt_kwargs.get("fused", False)),
+            "optimizer_source_decay_split": bool(source_decay_split),
+            "scheduler": str(tcfg.get("scheduler", "none")),
+            "implementation_version": str(((bcfg.get("model", {}) or {}).get("implementation", "legacy_adapter"))),
             "torch_compile": bool(tcfg.get("compile", False)),
             "history": history,
         }

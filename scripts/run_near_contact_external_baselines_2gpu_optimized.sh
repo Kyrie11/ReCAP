@@ -11,8 +11,10 @@ source scripts/lib/v50_runtime.sh
 : "${OCRAP_ROOT:=/data0/senzeyu2/dataset/OCRAP}"
 : "${TRAIN_NEAR:=$OCRAP_ROOT/train_near_contact}"
 : "${VAL_NEAR:=$OCRAP_ROOT/val_near_contact}"
+: "${CALIB_NEAR:=$OCRAP_ROOT/calibration_near_contact}"
 : "${TEST_NEAR:=$OCRAP_ROOT/test_near_contact}"
 : "${RUN:=runs/near_contact_external_baselines_optimized}"
+: "${WOMD_VAL:=/data0/senzeyu2/dataset/WOMD/waymo_open_dataset_motion_v_1_3_1/uncompressed/tf_example/validation/validation_tfexample.tfrecord@150}"
 : "${WOMD_VAL_INTERACTIVE:=/data0/senzeyu2/dataset/WOMD/waymo_open_dataset_motion_v_1_3_1/uncompressed/tf_example/validation_interactive/validation_interactive_tfexample.tfrecord@150}"
 : "${CL_WOMD:=$WOMD_VAL_INTERACTIVE}"
 : "${WOMD_NUM_SHARDS:=150}"
@@ -26,12 +28,13 @@ CL_WOMD="$(v50_normalize_womd_spec "$CL_WOMD" "$WOMD_NUM_SHARDS")"
 : "${CL_RENDER_MAX_AGENTS:=48}"
 : "${CL_PREFLIGHT:=true}"
 : "${CL_ORACLE_MAX_SCENARIOS:=20}"
-: "${RUN_ORACLE_CLOSED_LOOP:=false}"  # teacher-only diagnostic, excluded from deployable comparison
+: "${RUN_ORACLE_CLOSED_LOOP:=false}"
+: "${RUN_LEGACY_NEAR:=false}"
 : "${CL_MAX_STEPS:=40}"
 : "${CL_REPLAN_INTERVAL_STEPS:=1}"
 : "${CL_NUM_CANDIDATES:=24}"
 : "${CL_NUM_RECOVERY_OPTIONS:=12}"
-: "${CL_LABEL_MODE:=fast}"
+: "${CL_LABEL_MODE:=selected}"
 : "${CL_AUDIT_EVERY_N_STEPS:=0}"
 : "${CL_SAVE_PARTIAL:=true}"
 : "${CL_PROFILE_TIMING:=true}"
@@ -42,22 +45,24 @@ CL_WOMD="$(v50_normalize_womd_spec "$CL_WOMD" "$WOMD_NUM_SHARDS")"
 : "${USE_DYNAMIC_SCHEDULER:=auto}"
 : "${DO_OFFLINE:=true}"
 : "${DO_CLOSED_LOOP:=true}"
-: "${TRAIN_GAMEFORMER_IF_MISSING:=true}"
-: "${FORCE_RETRAIN_GAMEFORMER:=false}"
-: "${CHECKPOINT_ROOT:=$RUN}"
-: "${GAMEFORMER_CHECKPOINT:=$CHECKPOINT_ROOT/gameformer_lite/best.pt}"
+# Backwards-compatible alias: old launcher used TRAIN_GAMEFORMER_IF_MISSING.
+: "${DO_TRAIN:=${TRAIN_GAMEFORMER_IF_MISSING:-true}}"
+: "${DO_CALIBRATE:=true}"
+: "${FORCE_RECALIBRATE:=false}"
+: "${CONFORMAL_DELTA:=${CONFORMAL_ALPHA:-0.10}}"
+: "${CONFORMAL_PREDICTION_HORIZON:=7}"
+: "${CONFORMAL_MISSION_HORIZON:=$CL_MAX_STEPS}"
+: "${CONFORMAL_CALIBRATION_UNIT:=group}"
+: "${CONFORMAL_CALIBRATION:=$RUN/conformal_calibration.json}"
+: "${CONFORMAL_INTERVALS:=}"
 : "${CUDA_DEVICES:=0,1}"
-: "${GAMEFORMER_GLOBAL_BATCH_SIZE:=64}"
-: "${GAMEFORMER_NUM_WORKERS_TOTAL:=8}"
-: "${GAMEFORMER_TRAIN_GPUS:=2}"
-: "${OCRAP_SDPA_BACKEND:=safe}"
-: "${OCRAP_AMP_DTYPE:=auto}"
+: "${MAX_PARALLEL:=2}"
 
 IFS=',' read -r -a GPU_LIST <<< "$CUDA_DEVICES"
 ((${#GPU_LIST[@]})) || GPU_LIST=(0 1)
-: "${MAX_PARALLEL:=${#GPU_LIST[@]}}"
+((MAX_PARALLEL >= 1)) || MAX_PARALLEL=1
+((MAX_PARALLEL <= 2)) || MAX_PARALLEL=2
 ((MAX_PARALLEL <= ${#GPU_LIST[@]})) || MAX_PARALLEL="${#GPU_LIST[@]}"
-((GAMEFORMER_TRAIN_GPUS <= ${#GPU_LIST[@]})) || GAMEFORMER_TRAIN_GPUS="${#GPU_LIST[@]}"
 CPU_COUNT="$(getconf _NPROCESSORS_ONLN 2>/dev/null || nproc 2>/dev/null || echo 8)"
 : "${THREADS_PER_JOB:=$(( CPU_COUNT / (2 * MAX_PARALLEL) ))}"
 ((THREADS_PER_JOB >= 1)) || THREADS_PER_JOB=1
@@ -67,23 +72,25 @@ CPU_COUNT="$(getconf _NPROCESSORS_ONLN 2>/dev/null || nproc 2>/dev/null || echo 
 export RUN CL_WOMD
 mkdir -p "$RUN" "$JAX_CACHE_DIR"
 
-if v50_bool_true "$DO_CLOSED_LOOP" && v50_bool_true "$CL_PREFLIGHT"; then
-  preflight_target_args=()
-  if [[ -n "$CL_TARGET_KEYS_FILE" ]]; then
-    preflight_target_args=(--target-keys-file "$CL_TARGET_KEYS_FILE" --require-target-keys)
-  fi
-  python tools/check_closed_loop_dataset_support.py \
-    --dataset "$CL_BUCKET_DATASET" --split "$CL_BUCKET_SPLIT" --womd-pattern "$CL_WOMD" \
-    --expected-source-role auto "${preflight_target_args[@]}" \
-    --output "$RUN/closed_loop_dataset_support.json"
+if [[ "$CONFORMAL_CALIBRATION_UNIT" == "group" ]]; then
+  echo "[CPSF] calibration_unit=group preserves the legacy launcher contract, but formal exchangeability is only group-level. For a stricter WOMD-scene certificate use CONFORMAL_CALIBRATION_UNIT=scene_max and ensure delta/T is supported by the number of independent calibration scenes." >&2
 fi
 
-# Deployable methods only by default.  The oracle can be enabled for a separate,
-# small teacher-only upper-bound audit without delaying the full experiment.
-CLOSED_LOOP_METHODS=(gameformer_lite marc_lite racp_lite predictive_safety_filter dro_cvar_filter cvar_risk_filter expected_risk_filter)
-if v50_bool_true "$RUN_ORACLE_CLOSED_LOOP"; then CLOSED_LOOP_METHODS=(oracle_recovery_filter "${CLOSED_LOOP_METHODS[@]}"); fi
-NONLEARNED=(marc_lite racp_lite expected_risk_filter cvar_risk_filter dro_cvar_filter predictive_safety_filter oracle_recovery_filter)
-NONLEARNED_CSV="$(IFS=,; echo "${NONLEARNED[*]}")"
+CONFIG=configs/external_baselines/near_contact_external_baselines.yaml
+# Exactly the six deployable Near-Contact main-table methods in provenance.py.
+METHODS=(
+  marc_lite
+  racp_lite
+  robust_scenario_mpc
+  predictive_safety_filter
+  dr_cvar_safety_filter
+  conformal_predictive_safety_filter
+)
+# Parseh et al. is a pre-impact unavoidable-collision planner, so its honest
+# OC-RAP home is Near-contact legacy/control rather than post-contact Contact.
+# Defaults preserve the six-method main table; opt in explicitly for supplements.
+if v50_bool_true "$RUN_LEGACY_NEAR"; then METHODS+=(severity_minimization); fi
+METHODS_CSV="$(IFS=,; echo "${METHODS[*]}")"
 
 common_env=(
   OMP_NUM_THREADS="$THREADS_PER_JOB"
@@ -109,69 +116,144 @@ run_env_cpu() {
   local cache="$JAX_CACHE_DIR/cpu"; mkdir -p "$cache"
   env CUDA_VISIBLE_DEVICES="" JAX_COMPILATION_CACHE_DIR="$cache" "${common_env[@]}" "$@"
 }
-join_first_gpus() { local count="$1" out="" i; for ((i=0;i<count;i++)); do [[ -n "$out" ]] && out+=","; out+="${GPU_LIST[$i]}"; done; printf '%s' "$out"; }
 
-checkpoint_valid() {
-  [[ -f "$GAMEFORMER_CHECKPOINT" ]] && python tools/validate_external_checkpoint.py \
-    --checkpoint "$GAMEFORMER_CHECKPOINT" --require-deployable-contract >/dev/null 2>&1
+if v50_bool_true "$DO_CLOSED_LOOP" && v50_bool_true "$CL_PREFLIGHT"; then
+  preflight_target_args=()
+  if [[ -n "$CL_TARGET_KEYS_FILE" ]]; then
+    preflight_target_args=(--target-keys-file "$CL_TARGET_KEYS_FILE" --require-target-keys)
+  fi
+  python tools/check_closed_loop_dataset_support.py \
+    --dataset "$CL_BUCKET_DATASET" --split "$CL_BUCKET_SPLIT" --womd-pattern "$CL_WOMD" \
+    --expected-source-role auto "${preflight_target_args[@]}" \
+    --output "$RUN/closed_loop_dataset_support.json"
+fi
+
+# These six baselines fit no neural weights. DO_TRAIN validates the regime data
+# and writes one train_summary.json per method, but intentionally creates no .pt.
+# The optimized registrar scans train/val only once for all six methods.
+if v50_bool_true "$DO_TRAIN"; then
+  run_env_cpu python -u tools/register_external_nonlearning_baselines.py \
+    --config "$CONFIG" --dataset "$TRAIN_NEAR" --val-dataset "$VAL_NEAR" \
+    --baselines "$METHODS_CSV" --output-root "$RUN" \
+    2>&1 | tee "$RUN/register_nonlearning_near.log"
+fi
+
+calibration_valid() {
+  local artifact="$1"
+  [[ -f "$artifact" ]] || return 1
+  python - "$artifact" "$CONFIG" "$CALIB_NEAR" "$WOMD_VAL" "$CONFORMAL_DELTA" "$CONFORMAL_PREDICTION_HORIZON" "$CONFORMAL_MISSION_HORIZON" "$CONFORMAL_CALIBRATION_UNIT" <<'PY' >/dev/null
+import hashlib, json, math, sys
+from pathlib import Path
+from ocrap.config import load_config
+artifact, config_path, dataset, womd, delta, H, T, unit = sys.argv[1:]
+delta=float(delta); H=int(H); T=int(T)
+try:
+    d=json.load(open(artifact))
+    cfg=load_config(config_path)
+    fp=hashlib.sha256(json.dumps(cfg,sort_keys=True,separators=(',',':'),ensure_ascii=False,default=str).encode()).hexdigest()
+    vals=[float(x) for x in d['conformal_prediction_intervals_m']]
+    ok=(d.get('requested_config_fingerprint')==fp and str(d.get('dataset'))==str(Path(dataset)) and
+        str(d.get('split'))=='calibration' and str(d.get('womd_pattern'))==str(womd) and
+        math.isclose(float(d.get('delta')),delta,rel_tol=0,abs_tol=1e-12) and
+        int(d.get('prediction_horizon'))==H and int(d.get('mission_horizon'))==T and str(d.get('calibration_unit'))==str(unit) and
+        len(vals)==H and all(math.isfinite(x) and x >= 0.0 for x in vals) and
+        d.get('teacher_labels_used') is False and d.get('test_labels_used') is False)
+except Exception:
+    ok=False
+raise SystemExit(0 if ok else 1)
+PY
 }
 
-train_gameformer() {
-  local visible train_dir
-  visible="$(join_first_gpus "$GAMEFORMER_TRAIN_GPUS")"
-  train_dir="$(dirname "$GAMEFORMER_CHECKPOINT")"
-  mkdir -p "$train_dir"
-  local command=(python -u -m ocrap.cli train-baseline)
-  if ((GAMEFORMER_TRAIN_GPUS > 1)); then
-    command=(torchrun --standalone --nproc_per_node="$GAMEFORMER_TRAIN_GPUS" -m ocrap.cli train-baseline)
-  fi
-  local train_cache="$JAX_CACHE_DIR/train"; mkdir -p "$train_cache"
-  env CUDA_VISIBLE_DEVICES="$visible" JAX_COMPILATION_CACHE_DIR="$train_cache" "${common_env[@]}" "${command[@]}" \
-    --config configs/external_baselines/near_contact_gameformer_lite.yaml \
-    --dataset "$TRAIN_NEAR" --val-dataset "$VAL_NEAR" \
-    --baseline gameformer_lite --output "$train_dir" \
-    --set "external_baselines.training.global_batch_size=$GAMEFORMER_GLOBAL_BATCH_SIZE" \
-    --set "external_baselines.training.num_workers_total=$GAMEFORMER_NUM_WORKERS_TOTAL" \
-    --set external_baselines.training.tqdm=false \
-    --set "external_baselines.training.sdpa_backend=$OCRAP_SDPA_BACKEND" \
-    --set "external_baselines.training.amp_dtype=$OCRAP_AMP_DTYPE" \
-    2>&1 | tee "$RUN/train_gameformer_lite.log"
+validate_intervals() {
+  python - "$1" "$CONFORMAL_PREDICTION_HORIZON" <<'PY' >/dev/null
+import json, math, sys
+vals=json.loads(sys.argv[1]); H=int(sys.argv[2])
+assert isinstance(vals,list) and len(vals)==H, (len(vals) if isinstance(vals,list) else type(vals), H)
+assert all(math.isfinite(float(x)) and float(x)>=0.0 for x in vals), vals
+PY
 }
 
-GAMEFORMER_ARTIFACT_COMPLETE=false
-if v50_bool_true "$SKIP_COMPLETE_METHODS" && python tools/check_closed_loop_artifact.py \
-    --output "$RUN/closed_loop_gameformer_lite.json" --quiet; then
-  GAMEFORMER_ARTIFACT_COMPLETE=true
-fi
-NEED_GAMEFORMER_CHECKPOINT=true
-if ! v50_bool_true "$DO_OFFLINE" && [[ "$GAMEFORMER_ARTIFACT_COMPLETE" == true ]]; then
-  NEED_GAMEFORMER_CHECKPOINT=false
-fi
-if [[ "$NEED_GAMEFORMER_CHECKPOINT" == true ]]; then
-  if v50_bool_true "$FORCE_RETRAIN_GAMEFORMER" || ! checkpoint_valid; then
-    if ! v50_bool_true "$TRAIN_GAMEFORMER_IF_MISSING"; then
-      echo "Missing/invalid GameFormer checkpoint and training disabled: $GAMEFORMER_CHECKPOINT" >&2; exit 2
-    fi
-    train_gameformer
-  fi
-  checkpoint_valid || { echo "Invalid GameFormer checkpoint after training: $GAMEFORMER_CHECKPOINT" >&2; exit 2; }
-  echo "[REUSE/READY] GameFormer checkpoint $GAMEFORMER_CHECKPOINT"
+if [[ -n "$CONFORMAL_INTERVALS" ]]; then
+  validate_intervals "$CONFORMAL_INTERVALS"
+  echo "[CALIBRATION] using explicit CONFORMAL_INTERVALS=$CONFORMAL_INTERVALS"
 else
-  echo "[REUSE] complete GameFormer closed-loop artifact; checkpoint preparation skipped"
+  if v50_bool_true "$DO_CALIBRATE"; then
+    if v50_bool_true "$FORCE_RECALIBRATE" || ! calibration_valid "$CONFORMAL_CALIBRATION"; then
+      echo "[CALIBRATION] fitting CPSF horizon-wise conformal prediction intervals from $CALIB_NEAR against WOMD standard validation"
+      run_env_cpu python -u tools/calibrate_external_baselines.py \
+        --config "$CONFIG" --dataset "$CALIB_NEAR" --split calibration \
+        --womd-pattern "$WOMD_VAL" --delta "$CONFORMAL_DELTA" \
+        --prediction-horizon "$CONFORMAL_PREDICTION_HORIZON" \
+        --mission-horizon "$CONFORMAL_MISSION_HORIZON" \
+        --calibration-unit "$CONFORMAL_CALIBRATION_UNIT" \
+        --output "$CONFORMAL_CALIBRATION" \
+        2>&1 | tee "$RUN/calibrate_conformal.log"
+    else
+      echo "[REUSE] valid CPSF conformal calibration $CONFORMAL_CALIBRATION"
+    fi
+  elif ! calibration_valid "$CONFORMAL_CALIBRATION"; then
+    echo "DO_CALIBRATE=false but no compatible CPSF calibration artifact exists. Set DO_CALIBRATE=true or CONFORMAL_INTERVALS='[...]' explicitly." >&2
+    exit 2
+  fi
+  CONFORMAL_INTERVALS="$(python - "$CONFORMAL_CALIBRATION" <<'PY'
+import json,sys
+d=json.load(open(sys.argv[1]))
+print(json.dumps([float(x) for x in d['conformal_prediction_intervals_m']],separators=(',',':')))
+PY
+)"
+  validate_intervals "$CONFORMAL_INTERVALS"
 fi
+export CONFORMAL_INTERVALS CONFORMAL_DELTA CONFORMAL_PREDICTION_HORIZON CONFORMAL_MISSION_HORIZON CONFORMAL_CALIBRATION_UNIT WOMD_VAL
+
+eval_one() {
+  local method="$1" gpu="$2"
+  echo "[OFFLINE] near method=$method gpu=$gpu conformal_intervals=$CONFORMAL_INTERVALS"
+  run_env_gpu "$gpu" python -u -m ocrap.cli evaluate-baseline \
+    --config "$CONFIG" --dataset "$TEST_NEAR" --split test \
+    --output "$RUN/eval_near_contact_${method}.json" --baselines "$method" \
+    --set "external_baselines.policy.conformal_prediction_intervals_m=$CONFORMAL_INTERVALS" \
+    2>&1 | tee "$RUN/eval_near_contact_${method}.log"
+}
+
+supports_wait_pid_capture() {
+  help wait 2>/dev/null | grep -Eq -- '(^|[[:space:]])-p([[:space:]]|[[:punct:]])'
+}
+run_queue_dynamic() {
+  local runner="$1"; shift; local -a items=("$@")
+  local next=0 active=0 failed=0 done_pid status gpu item i
+  declare -A PID_GPU=() PID_ITEM=()
+  launch_one() { local x="$1" g="$2"; "$runner" "$x" "$g" & local p=$!; PID_GPU[$p]="$g"; PID_ITEM[$p]="$x"; active=$((active+1)); }
+  for ((i=0;i<MAX_PARALLEL && next<${#items[@]};i++)); do launch_one "${items[$next]}" "${GPU_LIST[$i]}"; next=$((next+1)); done
+  while ((active>0)); do
+    done_pid=""; if wait -n -p done_pid; then status=0; else status=$?; fi
+    gpu="${PID_GPU[$done_pid]}"; item="${PID_ITEM[$done_pid]}"; unset 'PID_GPU[$done_pid]' 'PID_ITEM[$done_pid]'; active=$((active-1))
+    if ((status!=0)); then echo "[ERROR] $item failed on GPU $gpu (status=$status)" >&2; failed=1; fi
+    if ((next<${#items[@]})); then launch_one "${items[$next]}" "$gpu"; next=$((next+1)); fi
+  done
+  return "$failed"
+}
+run_queue_fixed() {
+  local runner="$1"; shift; local -a items=("$@") pids=() names=(); local base j idx failed=0
+  for ((base=0;base<${#items[@]};base+=MAX_PARALLEL)); do
+    pids=(); names=()
+    for ((j=0;j<MAX_PARALLEL && base+j<${#items[@]};j++)); do idx=$((base+j)); "$runner" "${items[$idx]}" "${GPU_LIST[$j]}" & pids+=("$!"); names+=("${items[$idx]}"); done
+    for j in "${!pids[@]}"; do wait "${pids[$j]}" || { echo "[ERROR] ${names[$j]} failed" >&2; failed=1; }; done
+  done
+  return "$failed"
+}
+run_queue() {
+  local runner="$1"; shift; local use_dynamic=false
+  case "${USE_DYNAMIC_SCHEDULER,,}" in
+    1|true|yes|on) supports_wait_pid_capture || { echo "USE_DYNAMIC_SCHEDULER requested but Bash lacks wait -p" >&2; return 2; }; use_dynamic=true ;;
+    auto|'') supports_wait_pid_capture && use_dynamic=true ;;
+    0|false|no|off) use_dynamic=false ;;
+    *) echo "Invalid USE_DYNAMIC_SCHEDULER=$USE_DYNAMIC_SCHEDULER" >&2; return 2 ;;
+  esac
+  if [[ "$use_dynamic" == true ]]; then run_queue_dynamic "$runner" "$@"; else run_queue_fixed "$runner" "$@"; fi
+}
 
 if v50_bool_true "$DO_OFFLINE"; then
-  run_env_cpu python -u -m ocrap.cli evaluate-baseline \
-    --config configs/external_baselines/near_contact_external_baselines.yaml \
-    --dataset "$TEST_NEAR" --split test \
-    --output "$RUN/eval_near_contact_nonlearned.json" --baselines "$NONLEARNED_CSV" \
-    2>&1 | tee "$RUN/eval_near_contact_nonlearned.log" & p_cpu=$!
-  run_env_gpu "${GPU_LIST[0]}" python -u -m ocrap.cli evaluate-baseline \
-    --config configs/external_baselines/near_contact_gameformer_lite.yaml \
-    --dataset "$TEST_NEAR" --checkpoint "$GAMEFORMER_CHECKPOINT" --split test \
-    --output "$RUN/eval_near_contact_gameformer_lite.json" --baselines gameformer_lite \
-    2>&1 | tee "$RUN/eval_near_contact_gameformer_lite.log" & p_gpu=$!
-  failed=0; wait "$p_cpu" || failed=1; wait "$p_gpu" || failed=1; ((failed == 0)) || exit 1
+  run_queue eval_one "${METHODS[@]}"
 fi
 
 run_closed_loop_method() {
@@ -181,13 +263,9 @@ run_closed_loop_method() {
     echo "[REUSE] near closed-loop method=$method is already complete: $output"
     return 0
   fi
-  local config=configs/external_baselines/near_contact_external_baselines.yaml
   local label_mode="$CL_LABEL_MODE" max_scenes="$CL_MAX_SCENARIOS" exhaustive=false sparse=true
-  local ckpt=() target_args=()
-  if [[ "$method" == gameformer_lite ]]; then
-    config=configs/external_baselines/near_contact_gameformer_lite.yaml
-    ckpt=(--checkpoint "$GAMEFORMER_CHECKPOINT")
-  elif [[ "$method" == oracle_recovery_filter ]]; then
+  local target_args=()
+  if [[ "$method" == oracle_recovery_filter ]]; then
     label_mode=all; exhaustive=true; sparse=false; max_scenes="$CL_ORACLE_MAX_SCENARIOS"
   fi
   if [[ -n "$CL_TARGET_KEYS_FILE" ]]; then
@@ -195,8 +273,8 @@ run_closed_loop_method() {
   fi
   echo "[START] near method=$method gpu=$gpu label_mode=$label_mode max_scenes=$max_scenes"
   run_env_gpu "$gpu" python -u -m ocrap.cli closed-loop \
-    --config "$config" --dataset "$CL_WOMD" "${ckpt[@]}" \
-    --output "$output" \
+    --config "$CONFIG" --dataset "$CL_WOMD" --output "$output" \
+    --set "external_baselines.policy.conformal_prediction_intervals_m=$CONFORMAL_INTERVALS" \
     --set "closed_loop.method=$method" \
     --set "closed_loop.max_scenarios=$max_scenes" \
     --set "closed_loop.max_bucket_targets=$max_scenes" \
@@ -234,68 +312,27 @@ run_closed_loop_method() {
   echo "[DONE] near method=$method gpu=$gpu"
 }
 
-run_closed_loop_dynamic() {
-  local -a methods=("$@")
-  local next=0 active=0 failed=0 gpu method done_pid status i
-  declare -A PID_GPU=() PID_METHOD=()
-  launch_one() { local m="$1" g="$2"; run_closed_loop_method "$m" "$g" & local p=$!; PID_GPU[$p]="$g"; PID_METHOD[$p]="$m"; active=$((active+1)); }
-  for ((i=0; i<MAX_PARALLEL && next<${#methods[@]}; i++)); do launch_one "${methods[$next]}" "${GPU_LIST[$i]}"; next=$((next+1)); done
-  while ((active>0)); do
-    done_pid=""; if wait -n -p done_pid; then status=0; else status=$?; fi
-    gpu="${PID_GPU[$done_pid]}"; method="${PID_METHOD[$done_pid]}"; unset 'PID_GPU[$done_pid]' 'PID_METHOD[$done_pid]'; active=$((active-1))
-    if ((status!=0)); then echo "[ERROR] $method failed on GPU $gpu (status=$status)" >&2; failed=1; fi
-    if ((next<${#methods[@]})); then launch_one "${methods[$next]}" "$gpu"; next=$((next+1)); fi
-  done
-  return "$failed"
-}
-
-run_closed_loop_fallback() {
-  local -a methods=("$@") pids=() names=(); local base j idx failed=0
-  for ((base=0; base<${#methods[@]}; base+=MAX_PARALLEL)); do
-    pids=(); names=()
-    for ((j=0; j<MAX_PARALLEL && base+j<${#methods[@]}; j++)); do idx=$((base+j)); run_closed_loop_method "${methods[$idx]}" "${GPU_LIST[$j]}" & pids+=("$!"); names+=("${methods[$idx]}"); done
-    for j in "${!pids[@]}"; do wait "${pids[$j]}" || { echo "[ERROR] ${names[$j]} failed" >&2; failed=1; }; done
-  done
-  return "$failed"
-}
-
-supports_wait_pid_capture() {
-  # Bash 5.0 has ``wait -n`` but not ``wait -p``. Version-only checks are
-  # therefore incorrect on common enterprise distributions.
-  help wait 2>/dev/null | grep -Eq -- '(^|[[:space:]])-p([[:space:]]|[[:punct:]])'
-}
-
 if v50_bool_true "$DO_CLOSED_LOOP"; then
-  use_dynamic=false
-  case "${USE_DYNAMIC_SCHEDULER,,}" in
-    1|true|yes|on)
-      supports_wait_pid_capture || { echo "USE_DYNAMIC_SCHEDULER requested but this Bash lacks wait -p" >&2; exit 2; }
-      use_dynamic=true
-      ;;
-    auto|'')
-      supports_wait_pid_capture && use_dynamic=true
-      ;;
-    0|false|no|off) use_dynamic=false ;;
-    *) echo "Invalid USE_DYNAMIC_SCHEDULER=$USE_DYNAMIC_SCHEDULER" >&2; exit 2 ;;
-  esac
-  if [[ "$use_dynamic" == true ]]; then
-    echo "[SCHEDULER] dynamic wait -n/-p"
-    run_closed_loop_dynamic "${CLOSED_LOOP_METHODS[@]}"
-  else
-    echo "[SCHEDULER] portable fixed batches (wait -p unavailable or disabled)"
-    run_closed_loop_fallback "${CLOSED_LOOP_METHODS[@]}"
-  fi
+  CLOSED_LOOP_METHODS=("${METHODS[@]}")
+  if v50_bool_true "$RUN_ORACLE_CLOSED_LOOP"; then CLOSED_LOOP_METHODS=(oracle_recovery_filter "${CLOSED_LOOP_METHODS[@]}"); fi
+  run_queue run_closed_loop_method "${CLOSED_LOOP_METHODS[@]}"
 fi
 
-python - <<'PY'
-import glob,json,os
-run=os.environ['RUN']; rows=[]
-for p in sorted(glob.glob(os.path.join(run,'closed_loop_*.json'))):
-    if p.endswith(('.progress.json','.partial')): continue
-    try:d=json.load(open(p))
-    except Exception:continue
-    rows.append({k:d.get(k) for k in ['method','source','label_mode','num_scenes','num_decisions','collision_scene_rate','offroad_scene_rate','scene_min_clearance_m_p05','scene_ttc_s_p05','critical_ttc_exposure_duration_s','closed_loop_bounded_NUP','intervention_rate','timing']})
-out=os.path.join(run,'closed_loop_summary.json')
-with open(out,'w') as f: json.dump({'womd_spec':os.environ.get('CL_WOMD'),'methods':rows},f,indent=2)
-print({'event':'near_contact_closed_loop_summary','output':out,'num_methods':len(rows)})
+python tools/summarize_external_closed_loop.py \
+  --run "$RUN" --regime near --output "$RUN/closed_loop_summary.json" \
+  --methods "$METHODS_CSV" --womd-spec "$CL_WOMD"
+python - "$RUN/closed_loop_summary.json" <<'PY'
+import json, os, sys
+p=sys.argv[1]
+d=json.load(open(p))
+d['conformal_calibration']={
+    'delta': float(os.environ['CONFORMAL_DELTA']),
+    'prediction_horizon': int(os.environ['CONFORMAL_PREDICTION_HORIZON']),
+    'mission_horizon': int(os.environ['CONFORMAL_MISSION_HORIZON']),
+    'calibration_unit': os.environ['CONFORMAL_CALIBRATION_UNIT'],
+    'prediction_intervals_m': json.loads(os.environ['CONFORMAL_INTERVALS']),
+    'raw_calibration_womd_spec': os.environ['WOMD_VAL'],
+}
+with open(p,'w') as f: json.dump(d,f,indent=2)
+print({'event':'near_contact_closed_loop_summary_augmented','output':p,'num_methods':len(d.get('methods',[]))})
 PY

@@ -4,32 +4,30 @@ external_baselines:
   max_candidates: 24
   supervision_target: logged_nominal
   allow_teacher_supervision: false
+  implementation: source_backed_topology_adapter_v58
   hard_weight: 12.0
   harm_weight: 2.0
   oracle_weight: 0.6
-  topology_weight: 0.5
   model:
     arch: betopnet_lite
     max_candidates: 24
-    # Compact OC-RAP adapter for the uploaded BeTopNet architecture.
     d_model: 256
-    num_layers: 4
+    # Official BeTopNet prediction config uses six iterative decoder layers.
+    num_layers: 6
     num_heads: 8
     dropout: 0.10
     num_topology_agents: 16
     actor_topology_feature_dim: 16
     num_topology_map: 64
     map_topology_feature_dim: 14
-    num_topo: 16
+    num_topo: 32
     future_len: 20
     topology_dt: 0.1
     topology_far_threshold_m: 30.0
     mlp_hidden: 128
     mlp_layers: 3
   training:
-    # Avoid incompatible cuDNN SDPA execution-plan selection while retaining fast fused fallbacks.
     sdpa_backend: safe
-    # Prefer BF16 only when the current GPU supports it; otherwise use FP16 + GradScaler.
     amp_dtype: auto
     device: auto
     distributed: auto
@@ -37,14 +35,22 @@ external_baselines:
     num_workers: 8
     epochs: 30
     lr: 0.0001
-    weight_decay: 0.0002
+    weight_decay: 0.01
+    scheduler: multistep              # uploaded official source optimization schedule
+    milestones: [22, 24, 26, 28]
+    scheduler_gamma: 0.5
     grad_clip: 5.0
     tqdm: true
     pin_memory: true
     find_unused_parameters: auto
   loss_weights:
     policy: 1.0
-    topology: 1.0
+    # Official prediction code uses weight_top=100 with ground-truth futures.
+    # Existing OC-RAP NPZs intentionally omit other-agent GT futures, so v58
+    # uses the exact braid operator on observation-only CV target futures and a
+    # reduced weight to avoid amplifying that interface proxy. Rebuilt datasets
+    # with GT topology labels can set this back to 100.
+    topology: 10.0
     topology_topk_ratio: 0.25
     utility: 0.0
     hard: 0.0
@@ -60,3 +66,10 @@ external_baselines:
     betop_utility_weight: 0.25
     betop_branch_weight: 0.5
     betop_topology_conf_weight: 0.25
+    # BeTop Appendix C.1/C.2 planning constants: t_b=3 and inference lambda_m=0.5.
+    # Native learned marginal/joint futures are unavailable in the released
+    # planning code; OC-RAP uses observation-only actor CV projections only for
+    # this repulsive-potential interface term.
+    betop_branch_steps: 3
+    betop_short_term_cost_weight: 0.5
+    betop_contingency_dt: 0.1

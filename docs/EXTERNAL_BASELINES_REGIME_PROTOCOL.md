@@ -1,4 +1,4 @@
-# OC-RAP 外部 Baseline：三 Regime 复现、数据接入与评测协议（v50）
+# OC-RAP 外部 Baseline：三 Regime 复现、数据接入与评测协议（v56）
 
 本文件对应 `post-collision-ocrap-v48.58-rifa-revised.tex` 的实验意图，并约束 `safe / near_contact / contact` 三类外部 baseline 的**选择、数据使用、运行方式、指标发布与复现表述**。
 
@@ -10,7 +10,7 @@ OC-RAP 自身是一个 **regime-agnostic runtime policy**：Safe / Near-Contact 
 - **Near-Contact**：比较针对不确定性、低安全裕度和极端交互的 contingency / robust / safety-filter 方法。
 - **Contact**：比较接触之后的稳定、脱离、再碰撞抑制和 post-impact recovery 方法。
 
-为了避免数据泄漏，每个外部方法只读取其所在 regime 的训练/验证/测试数据。唯一需要统计校准的主表方法 `conformal_predictive_safety_filter` 只使用 `calibration_near_contact` 拟合一个冻结阈值，绝不使用 test 标签做阈值选择。
+为了避免数据泄漏，每个外部方法只读取其所在 regime 的训练/验证/测试数据。唯一需要统计校准的主表方法 `conformal_predictive_safety_filter` 只使用 `calibration_near_contact` 与其对应的 WOMD **standard validation** raw future，按论文 Algorithm 1 拟合逐预测步冻结 conformal radii `C_h`，绝不使用 test future/label 做阈值或半径选择。闭环压力测试仍可使用 WOMD `validation_interactive`，二者职责严格分离。
 
 ## 2. 最终主表：每个 Regime 六个
 
@@ -38,8 +38,8 @@ Safe legacy/control（不占 6 个主表名额）：`nominal_replay`, `wayformer
 | `racp_lite` | RACP | multimodal Bayesian belief、contingent plan、probabilistic risk | 无学习；数据契约验证 |
 | `robust_scenario_mpc` | Batkovic et al. Robust Scenario MPC | multimodal scenario expected cost + worst/robust constraint | 无学习；数据契约验证 |
 | `predictive_safety_filter` | Wabersich & Zeilinger PSF | proposed action 的 minimal correction、stage/terminal backup safety | 无学习；数据契约验证 |
-| `dr_cvar_safety_filter` | Safaoui & Summers DR-CVaR filter | sample uncertainty、Wasserstein-CVaR conservative inflation、minimal correction | 无学习；数据契约验证 |
-| `conformal_predictive_safety_filter` | Strawn et al. CPSF | held-out conformal calibration、冻结安全阈值、minimal-deviation filter | **仅 `calibration_near_contact`** |
+| `dr_cvar_safety_filter` | Safaoui & Summers DR-CVaR filter | 官方源码中的逐障碍/逐时刻 DR-CVaR safe halfspace；对 released affine-loss/unconstrained-support 子问题使用等价 closed-form `g*=empirical_CVaR+eps/alpha-delta`；公共 candidate lattice 上执行 MPC tracking/minimal-correction objective | 无神经训练；数据契约验证 |
+| `conformal_predictive_safety_filter` | Strawn et al. CPSF | Algorithm 1 的逐 horizon `C_h`（含 `(N+1)` infinity sentinel 和 `delta/T`）；Eq. (7) `||tau_bar^j-xhat|| >= C_h+epsilon`；最小轨迹偏离投影 | **仅 `calibration_near_contact` + 对应 WOMD standard validation raw future** |
 
 Near legacy/diagnostic：`gameformer_lite`, `expected_risk_filter`, `cvar_risk_filter`, `dro_cvar_filter`, `oracle_recovery_filter`。
 
@@ -51,9 +51,9 @@ Near legacy/diagnostic：`gameformer_lite`, `expected_risk_filter`, `cvar_risk_f
 
 | method id | 对应工作 | 保留的 paper core | 参数拟合 |
 |---|---|---|---|
-| `postimpact_mpc_lite` | Wang et al. 2023 Integrated Post-Impact Planning & Active Safety Control | stability recovery + secondary-collision risk + safe-braking-distance / terminal objective | 无学习；数据契约验证 |
+| `postimpact_mpc_lite` | Wang et al. 2023 Integrated Post-Impact Planning & Active Safety Control | SBD decision、MPC output/control objective、front/rear axle octagonal adhesion constraints、constant-velocity rhombus obstacle exclusion、LTR constraint、Magic-Formula/friction-similarity tire model、PSO tire-force allocation | 无学习；数据契约验证 |
 | `post_crash_braking` | Lu et al. 2017 Post-Impact Braking | collision-triggered autonomous braking、stable-stop intent | 无学习；数据契约验证 |
-| `postimpact_motion_tvlqr` | Wang et al. 2022 Post-Impact Motion Planning/TVLQR | polynomial/APF planning intent、trajectory re-alignment、TVLQR-like stability/control cost | 无学习；数据契约验证 |
+| `postimpact_motion_tvlqr` | Wang et al. 2022 Post-Impact Motion Planning/TVLQR | quintic `X/Y/psi` planning family + terminal equalities、APF obstacle/road objective、sideslip stability objective、acceleration/rear-axle force constraints、paper Q/R TVLQR、full Magic Formula + friction similarity、nonlinear tire-force allocation | 无学习；数据契约验证 |
 | `post_collision_restoration` | Ghosh et al. 2026 | steering + tractive-force restoration、lateral/yaw recovery | 无学习；数据契约验证 |
 | `compensatory_postimpact_mpc` | Cao et al. 2021 FCC-MPC | lateral/yaw deviation attenuation、AFS/differential-torque compensation objectives | 无学习；数据契约验证 |
 | `robust_postimpact_control` | Ao et al. 2022 | sliding-surface stability recovery + fault-tolerant allocation objective | 无学习；数据契约验证 |
@@ -222,7 +222,9 @@ DO_TRAIN=true DO_CALIBRATE=true DO_OFFLINE=false DO_CLOSED_LOOP=false \
 bash scripts/run_near_contact_external_baselines_2gpu_optimized.sh
 ```
 
-校准产物：`$RUN/conformal_near_contact_calibration.json`。
+校准产物：`$RUN/conformal_near_contact_calibration.json`。v56 中产物保存逐 horizon `conformal_prediction_intervals_m`，而不是旧版单一 scalar collision-risk threshold；同时记录 `delta`、mission horizon `T`、prediction horizon `H`、样本量、raw-WOMD pattern、数据/配置 fingerprint、calibration unit 与 exchangeability caveat。
+
+默认 launcher 维持 `CONFORMAL_CALIBRATION_UNIT=group` 以兼容既有命令；若要把有限样本保证严格提升到 WOMD scene 级独立性，设置 `CONFORMAL_CALIBRATION_UNIT=scene_max`。注意论文的 `delta_bar=delta/T` 与 `(N+1)` infinity sentinel 是硬数学条件：当 calibration scene 数不足以支持指定 `delta/T` 时，脚本会 fail closed/报告 infinity，而不会偷偷截断 quantile。此时应增加独立 calibration scenes、缩短 mission horizon，或在论文允许的实验设定下增大 `delta`，不能用 test 数据“补样本”。
 
 ### 6.5 Near：最终 test/closed-loop（推荐大规模）
 
@@ -302,12 +304,14 @@ scripts/run_all_regime_external_baselines_optimized.sh
 
 1. 原 `run_external_baselines.sh` 曾使用跨 regime 的 mixed train/val；现在只作为三 regime launcher wrapper，不再混合训练集。
 2. Safe 主表移除 BeTop/Wayformer，加入 PlanTF/PLUTO/PDM-Closed/PDM-Hybrid/IDM，最终六个。
-3. Near 主表移除通用 GameFormer、generic expected/CVaR 和伪严格 `dro_cvar_filter`，补充 robust scenario MPC、真正标注为 approximation 的 DR-CVaR 与 conformal PSF，最终六个。
+3. Near 主表移除通用 GameFormer、generic expected/CVaR 和旧 `dro_cvar_filter` surrogate；v56 的 `dr_cvar_safety_filter` 已按 Safaoui/Summers 官方源码恢复 DR-CVaR safe-halfspace construction，`conformal_predictive_safety_filter` 已按 Algorithm 1 + Eq. (7) 恢复逐 horizon conformal tube，而不是 scalar risk threshold。
 4. Contact 主表移除 pre-impact-heavy `severity_minimization`，补 Wang’22、Cao’21、Ao’22 三类纯 post-impact 方法，最终六个。
 5. 修复旧 summary 把 `scene_min_clearance_m_p05` / `scene_ttc_s_p05` 当顶层字段读取的问题；它们实际位于 `waymax_metrics`。
 6. Safe imitation target 不再根据 OC-RAP `feasible` annotation 回退到别的 candidate；严格 imitation logged nominal。
 7. `oracle_recovery_filter` 只保留 diagnostic，默认主运行不执行。
-8. Conformal threshold 只由 `calibration_near_contact` 生成，test 不参与 calibration。
+8. CPSF 的逐 horizon conformal radii 只由 `calibration_near_contact` + 对应 WOMD standard-validation future 生成，test 不参与 calibration；standard validation 与 closed-loop `validation_interactive` source 被显式分离。
+9. Wang 2023 Contact port 恢复 paper SBD、octagonal adhesion、constant-velocity rhombus、LTR gate、Magic-Formula friction scaling 与 PSO allocator；轮胎模型按论文拟合单位使用 `F_z[kN]` 与 `alpha[deg]`，而不是错误的 N/rad。
+10. Wang 2022 Contact port 恢复 quintic/APF/terminal constraints、TVLQR、full Magic Formula 与 nonlinear allocation；APF 使用论文中的固定 perceived obstacle coordinates `(X_b,Y_b)`，不会额外注入 OC-RAP learned predictor。
 
 ## 9. 本环境已经完成的验证 / 尚不能替你完成的验证
 

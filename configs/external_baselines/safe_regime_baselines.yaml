@@ -26,8 +26,6 @@ external_baselines:
     pdm_backup_margin_weight: 0.10
     pdm_collision_probability_gate: 0.45
     pdm_min_clearance_gate_m: -0.25
-    pdm_hybrid_learned_weight: 1.0
-    pdm_hybrid_rule_weight: 1.0
     idm_max_accel_mps2: 1.5
     idm_comfort_decel_mps2: 2.0
     idm_time_headway_s: 1.5

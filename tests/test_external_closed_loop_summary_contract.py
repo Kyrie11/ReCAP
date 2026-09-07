@@ -13,6 +13,20 @@ def _summary_module():
     return module
 
 
+
+def test_safe_publication_summary_keeps_nominal_safety_comfort_and_preservation_contract() -> None:
+    m = _summary_module()
+    expected = {
+        "collision_scene_rate", "offroad_scene_rate", "minimum_clearance_m",
+        "scene_min_clearance_m_median", "scene_min_clearance_m_p05",
+        "minimum_ttc_s", "scene_ttc_s_median", "scene_ttc_s_p05",
+        "acceleration_abs_p95_mps2", "jerk_p95", "yaw_rate_p95",
+        "acceleration_max_mps2", "deceleration_max_mps2", "jerk_max_abs",
+        "yaw_rate_max_abs", "route_progression_m", "closed_loop_bounded_NUP",
+        "closed_loop_nominal_deviation", "intervention_rate", "intervention_scene_rate",
+    }
+    assert expected <= set(m.SAFE)
+
 def test_near_publication_summary_keeps_full_low_headroom_recovery_contract() -> None:
     m = _summary_module()
     expected = {

@@ -2,51 +2,30 @@ external_baselines:
   baseline: pdm_hybrid
   methods: [pdm_hybrid]
   max_candidates: 24
-  supervision_target: logged_nominal
-  allow_teacher_supervision: false
-  model:
-    arch: pdm_hybrid
-    max_candidates: 24
-    d_model: 128
-    num_layers: 3
-    num_heads: 4
-    dropout: 0.10
-    history_len: 11
-    neighbors_to_predict: 8
-    future_len: 20
-  training:
-    sdpa_backend: safe
-    amp_dtype: auto
-    device: auto
-    distributed: auto
-    batch_size: 96
-    num_workers: 8
-    epochs: 20
-    lr: 0.0002
-    weight_decay: 0.0001
-    grad_clip: 5.0
-    tqdm: true
-    pin_memory: true
-    find_unused_parameters: false
-  loss_weights:
-    policy: 1.0
-    levelk: 0.0
-    level_response: 0.0
-    topology: 0.0
-    gameformer_traj: 0.0
-    pluto_contrastive: 0.0
-    utility: 0.0
-    hard: 0.0
-    harm: 0.0
-    oracle_rec: 0.0
-    deploy_rec: 0.0
+  # Source PDM-Hybrid executes the uncorrected PDM-Closed trajectory until the
+  # configured 2.0 s correction horizon. OC-RAP currently executes/replans inside
+  # that prefix, so the honest main-table action is identical to PDM-Closed here.
   policy:
+    risk_dt: 0.1
+    risk_clearance_buffer_m: 0.75
+    risk_clearance_scale_m: 2.0
+    risk_collision_temperature_m: 0.8
+    risk_severity_speed_mps: 12.0
+    backup_deceleration_mps2: 5.0
+    backup_reaction_time_s: 0.25
     pdm_progress_weight: 5.0
     pdm_ttc_weight: 5.0
     pdm_comfort_weight: 2.0
-    pdm_deviation_weight: 0.20
-    pdm_backup_margin_weight: 0.10
-    pdm_collision_probability_gate: 0.45
-    pdm_min_clearance_gate_m: -0.25
-    pdm_hybrid_learned_weight: 1.0
-    pdm_hybrid_rule_weight: 1.0
+    pdm_progress_distance_threshold_m: 0.1
+    pdm_collision_probability_gate: 0.05
+    pdm_min_clearance_gate_m: 0.0
+    pdm_route_half_width_m: 4.0
+    pdm_direction_backtrack_threshold_m: 2.0
+    pdm_comfort_jerk_threshold_mps3: 8.0
+    pdm_comfort_yaw_rate_threshold_rps: 0.8
+    pdm_comfort_steer_rate_threshold_rps: 1.2
+    pdm_hybrid_correction_horizon_s: 2.0
+  training:
+    validate_dataset: true
+    device: cpu
+    epochs: 1

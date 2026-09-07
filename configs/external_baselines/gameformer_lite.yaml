@@ -4,15 +4,15 @@ external_baselines:
   max_candidates: 24
   supervision_target: logged_nominal
   allow_teacher_supervision: false
-  hard_weight: 12.0
-  harm_weight: 2.0
-  oracle_weight: 1.0
   model:
     arch: gameformer_levelk
+    implementation: source_port_v54
     max_candidates: 24
-    # Matches the uploaded GameFormer design scale where possible.
+    # Uploaded GameFormer source: dim=256, encoder=6, heads=8, 6 modes,
+    # four interaction-reasoning stages. OC-RAP exposes a 2 s / 20-step
+    # executable prefix rather than the source 8 s prediction target.
     d_model: 256
-    num_layers: 4
+    num_layers: 6
     num_heads: 8
     dropout: 0.10
     num_levels: 4
@@ -20,41 +20,45 @@ external_baselines:
     future_len: 20
     history_len: 11
     neighbors_to_predict: 8
-    num_roots: 10
-    num_options: 12
-    root_feature_dim: 18
+    source_max_agents: 9
+    source_map_polygons: 64
+    source_map_points: 20
+    projection_beta: 2.0
     use_teacher_branch_context: false
-    traj_step_scale: 1.5
   training:
-    # Avoid incompatible cuDNN SDPA execution-plan selection while retaining fast fused fallbacks.
     sdpa_backend: safe
-    # Prefer BF16 only when the current GPU supports it; otherwise use FP16 + GradScaler.
     amp_dtype: auto
     device: auto
     distributed: auto
-    batch_size: 64
+    # Source train.py uses batch=16, 30 epochs, AdamW lr=1e-4.
+    batch_size: 16
     num_workers: 8
     epochs: 30
     lr: 0.0001
-    weight_decay: 0.0002
+    weight_decay: 0.01
+    scheduler: multistep
+    milestones: [20, 22, 24, 26, 28]
+    scheduler_gamma: 0.5
     grad_clip: 5.0
     tqdm: true
     pin_memory: true
-    find_unused_parameters: auto
+    persistent_workers: true
+    prefetch_factor: 2
+    fused_optimizer: true
+    find_unused_parameters: false
   loss_weights:
-    policy: 1.0
-    levelk: 0.50
-    level_response: 0.10
-    gameformer_traj: 0.35
+    # Native source-derived multimodal GMM loss is primary. A small logged-prefix
+    # candidate CE is the explicit adapter needed to select from the common lattice.
+    policy: 0.25
+    levelk: 0.0
+    level_response: 0.0
+    topology: 0.0
+    gameformer_traj: 1.0
+    plantf_native: 0.0
+    pluto_native: 0.0
+    pluto_contrastive: 0.0
     utility: 0.0
     hard: 0.0
     harm: 0.0
     oracle_rec: 0.0
     deploy_rec: 0.0
-  policy:
-    gamma_H: 0.0
-    gamma_D: 5.0
-    gamma_oracle_rec: 0.0
-    gameformer_hard_weight: 12.0
-    gameformer_harm_weight: 2.0
-    gameformer_oracle_weight: 1.0
