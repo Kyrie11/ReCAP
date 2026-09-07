@@ -11956,3 +11956,132 @@ The current evidence chain is:
 `+ action association != signed action equivariance`.
 
 V48.107 tests the constructive corollary: **a control-sufficient recovery representation should preserve the nominal state exactly while learning an ordinal, same-signed action response through the earliest interaction block that can combine candidate prefix and scene interaction information.**
+
+## V48.107 authoritative result — OC-FNAO first-block nominal-invariant ordinal orientation
+
+### Reliability / attribution gate
+
+V48.107 is attribution-ready.  The uploaded runtime contract, balanced/precision JSONs, PT states, comparison and pipeline manifest are byte-identical to the copies inside the uploaded audits archive.  Runtime SHA256 values match the uploaded V48.107 drop-in.  The PT files contain only the historical first Stage-I Transformer block state (`444,864` parameters) plus experiment metadata; the historical second block, V48.103 readout, root decoder, source and planner are not stored as trainable state.  The V48.103 state SHA256 recorded by each run matches the authoritative V48.103 PT exactly, and the V48.106 comparison/pipeline SHA256 prerequisites match the authoritative STOP artifacts.
+
+The evaluation populations are exactly the same V48.103/V48.104 target-specific populations.  `initial_v103_function_identity.valid=true`, `nominal_first_block_exact_identity=true`, `nominal_final_memory_exact_identity=true`, and `state_metrics_exact_v103.valid=true`.  Teacher sidecars are not attached to the model input, `test_roots_read=false`, and source/planner/root-decoder/other-Stage-I parameter counts are zero.  No engineering rerun is required.
+
+### Strict V48.107 preregistered decision
+
+Official status is **`FIRST_BLOCK_NOMINAL_INVARIANT_ACTION_ORIENTATION_STOP`**.
+
+- State: GO.  Exactly the V48.103 state geometry is preserved (`6/8` threshold cells, all four roles represented).
+- Support: STOP.  Only balanced certificate-Near and precision certificate-Contact satisfy the full AUC+shuffle gate (`2/8`); top-1 material cells are only three balanced cells.
+- Reserve/debt: STOP.  Four cells satisfy the AUC+shuffle gate (balanced dev-Near/dev-Contact/certificate-Near and precision certificate-Near); top-1 material is `4/8` but absolute/cross-role coverage fails.
+- Therefore neither preregistered partial branch is authorized.  The first-block orientation family is closed and the next branch is exactly the **raw-to-projected action-pathway audit**.
+
+### What V48.107 establishes
+
+1. **The first interaction block is trainable and the ordinal objective genuinely optimizes.**  Across both variants, train and dev orientation losses decrease monotonically through epoch 59.  Dev total orientation loss improves by roughly five percent; support and reserve pairwise orientation losses both improve.  V48.107 is therefore not an optimization/no-op failure.
+2. **Nominal-state invariance works as intended.**  Every State metric is bitwise/registered identical to V48.103 within the fixed `1e-7` identity contract.  Candidate-response learning no longer spends static-state margin.
+3. **Local pairwise ordering improvement does not imply a population-invariant signed coordinate.**  Balanced certificate-Near support reaches `AUC~0.818`, while precision certificate-Near falls to `~0.455`.  Precision certificate-Contact support reaches `~0.685`, while precision dev-Contact falls to `~0.443`.  The learned first-block rotation is therefore population-dependent.
+4. **Reserve/debt has a stronger constructive signal than Support.**  Certificate-Near reserve rises to `~0.95/~0.93`; certificate-Contact reserve rises from the V48.103 `~0.31` level to `~0.60/~0.63`.  This shows the first block can organize some upstream response evidence across held-out certificate populations.  It still fails the full reserve gate because dev coverage and top-1 consistency are incomplete.
+5. **A ranking surrogate can improve while the registered cross-population ranking target remains open.**  This is consistent with the known absence of general H-consistency guarantees for common pairwise ranking surrogates over practical linear/neural hypothesis classes.  The V48.107 result therefore strengthens the project rule that surrogate-loss improvement never substitutes for held-out AUC/top-1 plus permutation-null evidence.
+6. **The tested first-block family is insufficient, not the entire concept of interaction.**  V48.107 falsifies the preregistered `single first-block + nominal anchoring + equal-weight sign-only ordinal objective` family as a route to joint control sufficiency.  It does not prove no possible interaction mechanism can work.  The next experiment must identify whether the relevant Support orientation is already present before projection or whether the raw candidate pathway itself is insufficient.
+
+### Near / Contact after V48.107
+
+- **Near:** state preservation remains solved.  Reserve has strong certificate behavior, but support continues to oscillate across balanced/precision rather than converge monotonically.  Near is no longer a generic “state versus response” conflict; it is a **population-invariant Support/Reserve orientation** problem.
+- **Contact:** certificate debt separation improves substantially, especially relative to V48.103, but dev/certificate orientation is not jointly stable.  Contact therefore shows a positive interaction signal without complete cross-population debt-repayment sufficiency.
+- The unified mathematical target remains `candidate-minus-nominal signed recovery response`: positive direction means establishing/retaining reserve in Near and repaying negative recovery debt in Contact.  No regime router is authorized.
+
+### Promotion / Main-stack status after V48.107
+
+V48.107 is not an audit, but its concrete first-block ordinal mechanism does **not** enter Main because Support and Reserve both STOP.  Retain/promote only the already-supported hard principles:
+
+- exact nominal invariance;
+- candidate-minus-nominal recovery semantics;
+- held-out signed transfer plus within-group permutation null as the decision owner;
+- `surrogate ranking improvement != population-invariant control orientation`.
+
+The stable Main stack remains unchanged:
+
+`OC-MERO observation-consistent deployability`
+`+ actuator-realizable executable recovery`
+`+ counterfactual equivalence-partition transport`
+`+ identifiability before capacity`
+`+ support-establishment / signed reserve-debt semantics`
+`+ recovery base-state chart`
+`+ role-isolated RIFA`.
+
+The candidate higher-level replacement remains **nominal-invariant control-sufficient recovery representation**, pending a true State+Support+Reserve Full GO.
+
+## V48.108 OC-RPAP — Raw-to-Projected Action Pathway Audit
+
+### Why V48.108 is the authorized next step
+
+V48.107 formal STOP explicitly closes the single first-block orientation family and preregisters a raw-to-projected pathway audit before any broader encoder/source capacity is opened.  The remaining question is upstream and structural: **is transferable Support/Reserve orientation already present in the raw candidate-prefix/control variables, and are the frozen Stage-I input projections information-preserving for those action deltas?**
+
+### A-priori candidate pathway
+
+The pathway is fixed by the historical `StructuredTokenEncoder` layout, not selected after seeing V48.107:
+
+`ego + prefix_param + macro/scalar + prefix_state + control`.
+
+With the authoritative flat layout its raw dimension is `156`.  Its exact projected counterpart before any Transformer interaction is the five fixed semantic tokens at indices `1..5`, dimension `5*192 = 960`.  All agent/map/route/BEV/dynamics inputs are treated as static scene context and the runner fails closed if they vary across candidates inside the same scene-time group.
+
+### Structural projection audit
+
+Each of the five historical input projectors is an affine map `y = W x + b`.  Candidate-minus-nominal deltas cancel bias and position constants, so
+
+`Delta y = W Delta x`.
+
+V48.108 records for every projector:
+
+- input/output dimensions;
+- matrix rank and full-column-rank status;
+- singular-value range and condition number;
+- pseudoinverse reconstruction error on actual candidate deltas.
+
+If every `W` has full column rank, the raw candidate delta is injectively embedded by that projector.  In that case a missing downstream orientation cannot be attributed to literal information destruction by the linear projection itself; it must arise from representation organization, interaction, finite-probe conditioning, or missing relational information.
+
+### Target-specific raw and projected probes
+
+V48.108 reuses the exact V48.102 target-specific probe/evaluation protocol separately on the raw 156-D pathway and projected 960-D counterpart:
+
+- State diagnostic from nominal pathway state;
+- Support from candidate-minus-nominal `delta` in the DRS-activation stratum;
+- Reserve/debt from `delta * (1 + tanh(nominal_state))` in the deployability-gain stratum;
+- identical train-only linear probe family;
+- identical within-group action permutation null;
+- identical held-out Near/Contact and dev/certificate populations.
+
+No target-dependent token selection is performed.  Raw group/component localization may be inspected later only as diagnostic evidence; branching is owned by the fixed whole candidate pathway.
+
+### V48.108 preregistered gates
+
+Support/Reserve each use the unchanged action gate:
+
+```text
+AUC >= 0.65 AND true-minus-shuffled >= +0.05 in >=6/8 cells;
+>=3/4 roles with Near + Contact represented;
+top1 lift >= +0.10 in >=4/8 cells with Near + Contact represented.
+```
+
+The structural projection pass additionally requires full-column-rank projections in both variants and actual candidate-delta reconstruction relative error `<=1e-4` with projected block-map error `<=2e-5`.
+
+### V48.108 preregistered branches
+
+- **Raw Support + Raw Reserve GO and structural injectivity passes:** raw candidate pathway already contains both transferable action axes.  Do not retrain Transformer blocks.  Preregister one direct nominal-invariant projected-path response-carrier experiment, no source sweep.
+- **Raw Support GO, Reserve STOP:** preserve the Support result and audit raw candidate-to-scene Reserve/debt interaction only.
+- **Raw Reserve GO, Support STOP:** preserve the Reserve result and audit raw candidate-to-scene Support-establishment interaction only.
+- **Both raw axes STOP:** raw candidate pathway is insufficient by itself; next audit a fixed raw candidate-to-scene relational interaction before training anything broader.
+- **Projection structural injectivity fails:** close Transformer training and preregister only a minimal projection-preservation repair.  Do not open source/broad encoder capacity.
+
+Projected-path probe results are reported to localize conditioning/organization effects, but the injectivity test is the structural owner of the “projection destroyed information” question.
+
+### Durable theory entering V48.108
+
+The evidence chain is now:
+
+`static sufficiency != control sufficiency`
+`+ parameter factorization != representation factorization`
+`+ response-loss reduction != cross-distribution control sufficiency`
+`+ action association != signed action equivariance`
+`+ within-domain ordinal improvement != population-invariant action orientation`.
+
+V48.108 tests the next structural proposition: **before adding more interaction capacity, determine whether the candidate-action pathway already carries the needed transferable response and whether the fixed projection is injective for the candidate-minus-nominal delta.**
