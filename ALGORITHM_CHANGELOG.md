@@ -12514,3 +12514,27 @@ candidate-conditioned constraint-native recovery orientation
 ```
 
 and exactly one nominal-invariant response-carrier integration. Until then the historical recovery base-state chart remains Main and no source/Transformer/boundary/router modification is authorized.
+
+## V48.111 submission full-evaluation harness (2026-09-07)
+
+V48.111 OC-CNRO remains **audit-only** and is not promoted into the deployed planner before its preregistered Support/Reserve gates are observed.  For submission-time reporting, the repository now includes an end-to-end evaluation harness that evaluates the **frozen checkpoint and frozen per-regime calibration used by the V48.111 audit chain** on all Safe/Near-Contact/Contact closed-loop endpoints.
+
+Scientific contract:
+
+- no V48.111/CNRO probe weight is inserted into runtime planning;
+- no finetuning, LR/epoch sweep, recalibration, threshold sweep or dataset reconstruction;
+- default model run is `ocrap_v48_80_dcp_drfc_bcde_rifa_pistc_main`, because this is the frozen checkpoint owner consumed by V48.111;
+- both `balanced` and `precision` can be evaluated; each run uses the same one-policy three-regime closed-loop launcher;
+- `ALLOW_DIAGNOSTIC_RC20=1` is set explicitly because the absolute source has not satisfied the historical source-freeze gate; the resulting metrics are submission diagnostics and must not be described as a preregistered source-GO result;
+- output summaries preserve all code-aligned Safe, Near and Contact metrics and fail closed if a regime artifact is incomplete.
+
+Run with:
+
+```bash
+GPU0=0 GPU1=1 \
+BASE_OUT=/home/senzeyu2/code/OC-RAP/runs \
+VARIANTS=balanced,precision \
+bash scripts/run_v48_111_submission_three_regime.sh
+```
+
+This harness converts the repository from an audit-only *workflow* into a complete submission-time *evaluation workflow* without changing the scientific status of CNRO itself.

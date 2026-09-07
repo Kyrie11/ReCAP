@@ -1,0 +1,318 @@
+\documentclass[conference]{IEEEtran}
+
+\usepackage[utf8]{inputenc}
+\usepackage{amsmath,amssymb,amsfonts,bm}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{algorithm}
+\usepackage{algorithmic}
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage{url}
+\usepackage[hidelinks]{hyperref}
+
+\DeclareMathOperator*{\argmin}{arg\,min}
+\DeclareMathOperator*{\argmax}{arg\,max}
+\DeclareMathOperator{\sigmoid}{sigmoid}
+\DeclareMathOperator{\LCVaR}{LCVaR}
+\DeclareMathOperator{\TopK}{TopK}
+
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\cA}{\mathcal{A}}
+\newcommand{\cG}{\mathcal{G}}
+\newcommand{\cP}{\mathcal{P}}
+\newcommand{\cR}{\mathcal{R}}
+\newcommand{\cZ}{\mathcal{Z}}
+\newcommand{\rvn}{\mathrm{OC\mbox{-}MERO}}
+\newcommand{\sr}{\mathrm{SRCA}}
+\newcommand{\cnro}{\mathrm{CNRO}}
+\newtheorem{proposition}{Proposition}
+
+\title{OC-RAP: Observation-Consistent Recovery Planning via Support--Reserve Complementarity}
+\author{Anonymous Authors}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+A safe autonomous-driving planner must preserve nominal utility in ordinary traffic, avoid entering unrecoverable states near contact, and continue improving safety after contact. The central difficulty is informational: branch-wise planning may certify a candidate by using different recovery maneuvers for latent futures that remain indistinguishable to the deployed vehicle. We formulate this mismatch as an \emph{oracle-to-deployable recoverability gap} and introduce \textbf{OC-RAP}, a single regime-agnostic recovery planner. OC-RAP pairs candidate prefixes with actuator-realizable recovery continuations and uses \textbf{OC-MERO} to evaluate each fixed recovery option over observation-compatible latent roots before nested lower-tail aggregation. A non-compensatory support--reserve admission then distinguishes support establishment from signed reserve/debt, while \textbf{RIFA} keeps absolute feasibility isolated from relative ranking. Our current mechanism analysis further shows that recovery orientation cannot be treated as a candidate-invariant scene direction: different candidates can activate different limiting interactions. We therefore introduce a constraint-native, nominal-zero audit based on the signed candidate-induced change of active clearance, with dimension-matched nearest-agent controls and candidate-identity shuffling. This yields one deployable information pattern and one signed recovery semantics across Safe, Near-Contact, and Contact, without regime routers, privileged future input, or regime-specific thresholds.
+\end{abstract}
+
+\section{Introduction}
+\label{sec:introduction}
+
+Collision avoidance alone is an incomplete notion of closed-loop driving safety. A planner must preserve useful fallback actions before contact and continue making safety-improving decisions after contact, where stabilization, re-contact avoidance, secondary-collision prevention, and safe re-entry remain relevant~\cite{koopman2024anatomy,wang2023integrated,parseh2023motion,wang2024post,yang2025post,ghosh2026post}. We therefore treat \emph{recoverability} as an action-level planning primitive rather than a terminal collision label.
+
+This view exposes an information-pattern failure. Suppose multiple latent futures remain observationally indistinguishable after a candidate prefix. A branch-wise oracle may brake in one future and laterally escape in another, yet the deployed vehicle cannot condition on the hidden future identity. Existence of a branch-specific recovery is therefore weaker than existence of a \emph{deployable} recovery. OC-RAP addresses this oracle-to-deployable gap by requiring recovery decisions to be measurable with respect to the post-prefix observation.
+
+A second challenge is that recoverability is signed and state-dependent. Before a common executable recovery exists, a useful action must establish support. Once support exists, the action must preserve that support while increasing positive reserve or repaying negative recovery debt. Near-Contact and Contact should therefore not be implemented as separate experts: they are different signs/states of the same recoverability object. This motivates a single policy with shared decision boundaries rather than a regime router.
+
+A third challenge is causal representation. Our recent audits show that neither a fixed latent axis nor a candidate-invariant scene-conditioned direction transfers consistently across Near/Contact and development/certificate populations. A candidate changes which interaction is limiting. Consequently, the invariant object should be the \emph{candidate-conditioned constraint-response rule}, not a scene-wide orientation. The current V48.111 audit operationalizes this principle through a nominal-zero signed clearance response, $\Delta h_i^a(t)=h_i^a(t)-h_i^{a_0}(t)$, and compares candidate-specific active-agent geometry with an equal-dimensional nearest-agent control. This audit does not enter the runtime policy unless its preregistered cross-population gates are satisfied; it is an identifiability-before-capacity mechanism for deciding what representation may be promoted.
+
+Finally, relative evidence that one candidate improves over nominal is not equivalent to absolute evidence that it is deployably recoverable. We therefore use \textbf{Role-Isolated Feasibility Admission (RIFA)}: the frozen proposal/ranking path is separated from the absolute recoverability predicate, preventing a large relative score from compensating for absolute infeasibility.
+
+Our contributions are fourfold:
+\begin{enumerate}[leftmargin=*]
+    \item \textbf{Observation-consistent deployable recoverability.} We formalize the oracle-to-deployable recoverability gap and introduce OC-MERO, which evaluates a fixed recovery option over observation-compatible latent roots before any option selection and then performs nested lower-tail aggregation.
+    \item \textbf{Executable support--reserve recovery semantics.} Candidate prefixes are paired with actuator-realizable recovery continuations. A non-compensatory support--reserve admission uses one signed semantics across Safe, Near-Contact, and Contact: establish shared recovery support, preserve positive reserve, and repay negative recovery debt.
+    \item \textbf{Candidate-conditioned constraint-native identifiability.} We show that candidate-invariant scene orientation is insufficient and formulate the current constraint-native audit in terms of signed candidate-induced active-constraint response, dimension-matched active-vs-nearest controls, and candidate-identity shuffling. The audit is offline and fail-closed, so mechanism evidence is not conflated with runtime capacity fitting.
+    \item \textbf{Role isolation and unified evaluation.} RIFA separates absolute admission from relative ranking, while scene-disjoint Safe/Near-Contact/Contact strata evaluate nominal non-interference, critical-safety headroom, and post-contact recovery under the same policy.
+\end{enumerate}
+
+\section{Related Work}
+
+\subsection{Post-Crash, Post-Impact, and Collision-Mitigation Planning}
+Post-impact work demonstrates that safety does not end at the first collision. Robotaxi crash analyses highlight unsafe post-event evolution~\cite{koopman2024anatomy}, while post-impact vehicle-control studies address stabilization, controllability, and secondary-collision risk~\cite{wang2023integrated,parseh2023motion,wang2024post,yang2025post,ghosh2026post}. Collision-mitigation planners likewise consider unavoidable-impact severity and real-time evasive behavior~\cite{li2022vehicle,bosia2024real}. OC-RAP is complementary: it asks upstream whether a candidate action preserves a deployable recovery before contact, and it retains the same recovery semantics when contact has already occurred.
+
+\subsection{Reachability, Viability, Barrier Functions, and Safety Filters}
+Hamilton--Jacobi reachability, learned reachability, control barrier functions, and predictive/backup safety filters provide strong semantics for safe sets, invariance, reach-avoid behavior, and backup feasibility~\cite{bansal2017hamilton,bansal2021deepreach,lin2023generating,borquez2022parameter,ames2019control,koller2018learning,wabersich2021predictive,tearle2021predictive,kim2026backup,so2023solving}. Their existence guarantees do not automatically resolve our information-pattern question: a safe recovery may exist in every latent branch while no single post-prefix observation permits the deployed vehicle to select the branch-specific maneuver. OC-RAP therefore treats recovery choice itself as constrained by observation compatibility.
+
+\subsection{Risk-Aware, Distributionally Robust, and Contingency Planning}
+Risk-aware and distributionally robust planners use chance constraints, CVaR, ambiguity sets, scenario trees, or multimodal prediction~\cite{uryasev2000conditional,hakobyan2021wasserstein,safaoui2024distributionally,batkovic2020robust,nair2024predictive}. Contingency planners maintain multiple policies or fallback plans across futures~\cite{li2023marc,mustafa2024racp}, while formal driving models such as RSS impose structured safety rules~\cite{shalev2017formal}. OC-RAP shares the use of tail risk but differs in where the decision is constrained: the recovery option is fixed before aggregating latent futures that the deployed observation cannot distinguish.
+
+\subsection{Learning-Based Planning, Benchmarks, and Reliable Admission}
+Large-scale datasets, simulators, and closed-loop benchmarks have enabled data-driven autonomous planning~\cite{dosovitskiy2017carla,caesar2021nuplan,li2022metadrive,ettinger2021large,wilson2023argoverse,zhan2019interaction,althoff2017commonroad,krajewski2018highd,caesar2020nuscenes}. Recent surveys cover learning-based planning, risk assessment, and world models~\cite{ding2025understanding,lu2025risk,hu2025survey}. Calibration and conformal methods provide tools for statistically controlled admission under uncertainty~\cite{vovk2005algorithmic,stephen2021gentle,angelopoulos2024conformal,lekeufack2024conformal,strawn2023conformal}. In our formulation, calibration is downstream of a more basic question: which \emph{deployable recoverability property} should be admitted. We therefore first isolate the information pattern and the absolute source, then evaluate calibration and closed-loop performance.
+\section{Method}
+\label{sec:method}
+
+OC-RAP separates four roles: executable recovery construction, observation-consistent recoverability evaluation, absolute admission, and relative candidate selection. Candidate-conditioned representation audits are offline and never receive privileged future information.
+
+\subsection{Unified Recovery Planning}
+At planning time $t$, let
+\begin{equation}
+ h_t=\{x^e_{t-H:t},\mathcal X_{t-H:t},\mathcal M,\Omega_t\}
+\end{equation}
+be the observable history. The upstream planner produces nominal prefix $a_0$ and candidate set $\cA_t=\{a_0,a_1,\ldots,a_N\}$. The deployed policy
+\begin{equation}
+ a_t^{\rm exec}=\pi_{\rm OC\mbox{-}RAP}(h_t,\cA_t)
+\end{equation}
+receives no Safe/Near/Contact identifier. Proposal size, recovery options, admission semantics, and fallback rules are shared across all regimes.
+
+\subsection{Actuator-Realizable Recovery and OC-MERO}
+Each candidate is paired with a finite recovery library $\cG=\{g_1,\ldots,g_L\}$. Desired acceleration/steering commands are projected into acceleration, jerk, steering-angle, and steering-rate envelopes before rollout; actuator feasibility is therefore enforced by construction rather than by a post-hoc veto.
+
+For candidate $a$, the frozen recovery model provides latent roots $(z_k,p_k)$, post-prefix observation embeddings $e_k^o$, and root--option signed margins $\hat m_{k\ell}(a)$. Observation compatibility is
+\begin{equation}
+ C_{ij}(a)=\exp\!\left(-\frac{\|e_i^o-e_j^o\|_2^2/d_o}{\tau_o}\right),\qquad C_{ii}=1.
+\end{equation}
+OC-MERO first evaluates a \emph{fixed} recovery option over the compatible-root lower tail,
+\begin{align}
+ w_{ij}(a)&=\frac{C_{ij}(a)p_j(a)}{\sum_r C_{ir}(a)p_r(a)+\epsilon},\\
+ q_{i\ell}(a)&=\LCVaR_{\beta}(\{\hat m_{j\ell}(a)\};\{w_{ij}(a)\}),
+\end{align}
+then permits each distinguishable observation anchor to select its best valid option,
+\begin{align}
+ r_i(a)&=\max_{\ell}q_{i\ell}(a),\\
+ \widehat R_{\rm dep}(a)&=\LCVaR_{\alpha}(\{r_i(a)\};\{p_i(a)\}).
+ \label{eq:rdep_main}
+\end{align}
+This ordering prevents hidden-root-dependent recovery choices from being counted as deployable capability.
+
+\subsection{Support--Reserve Complementarity and RIFA}
+Let $q_i^{\max}=\max_\ell q_{i\ell}$ and define the hard shared-support mass
+\begin{equation}
+ D_h(a)=\sum_i p_i\mathbf 1[q_i^{\max}(a)\ge0],
+\end{equation}
+with deployability coordinate $F(a)=\sigmoid(\widehat R_{\rm dep}(a))$. The absolute support--reserve predicate is
+\begin{equation}
+ \mathcal A_{\rm sr}(a\mid a_0)=
+ \begin{cases}
+ \mathbf 1[D_h(a)>0], & D_h(a_0)=0,\\
+ \mathbf 1[D_h(a)>0]\mathbf 1[\widehat R_{\rm dep}(a)\ge0], & D_h(a_0)>0.
+ \end{cases}
+ \label{eq:srca_main}
+\end{equation}
+Thus positive deployability cannot compensate for destroying shared support. The same predicate realizes support establishment in low-headroom pre-contact states and reserve/debt semantics after support exists.
+
+RIFA first forms the frozen relative proposal
+\begin{equation}
+ \cP_K=\TopK_{a\in\cA_t\setminus\{a_0\}}(\rho(a),K_p),\qquad K_p=5,
+\end{equation}
+applies Eq.~\eqref{eq:srca_main} only within $\cP_K$, and reranks only surviving candidates with the frozen relative evidence path. If none survives, OC-RAP executes $a_0$.
+
+\subsection{Candidate-Conditioned Constraint-Native Orientation Audit}
+\label{subsec:cnro_main}
+A scene-wide orientation is insufficient when different candidate prefixes activate different interactions. The current V48.111 mechanism audit therefore keeps the first eight complete prefix states and uses only observation-side agent position, velocity, and footprint to form a constant-velocity continuation. For agent $i$ and prefix time $t_j$,
+\begin{equation}
+ h_{ij}^{a}=\|p_e^{a}(t_j)-p_i^{\rm CV}(t_j)\|-r_e-r_i.
+\end{equation}
+The candidate-induced signed constraint response is
+\begin{equation}
+ \Delta h_{ij}^{a}=h_{ij}^{a}-h_{ij}^{a_0}.
+ \label{eq:delta_h_main}
+\end{equation}
+Positive $\Delta h$ means that the candidate moves the corresponding clearance constraint toward greater reserve; negative $\Delta h$ means increasing debt. The audit compares two equal-dimensional relational families: the two currently nearest agents versus the two candidate-specific minimum-clearance agents. Both append the same $2\times8\times2=32$ constraint-response coordinates to the same 156-D candidate pathway, producing a strict 188-D versus 188-D causal control. CNRO is audit-only in the current release; no audit score is inserted into runtime planning before preregistered Support and Reserve transfer gates are satisfied.
+
+\begin{algorithm}[t]
+\caption{OC-RAP runtime decision (CNRO remains offline)}
+\label{alg:ocrap}
+\begin{algorithmic}[1]
+\STATE Generate nominal $a_0$ and candidates $\cA_t$ with the frozen upstream planner.
+\STATE Realize each candidate with actuator-feasible recovery options.
+\STATE Compute OC-MERO deployable recoverability $\widehat R_{\rm dep}(a)$ and shared-support mass $D_h(a)$.
+\STATE Form frozen top-$K$ proposal $\cP_K$ from relative evidence.
+\STATE Apply non-compensatory support--reserve admission in Eq.~\eqref{eq:srca_main} inside $\cP_K$.
+\STATE Rerank surviving candidates with frozen relative evidence; execute $a_0$ if none survives.
+\end{algorithmic}
+\end{algorithm}
+
+\section{Experiments}
+\label{sec:experiments}
+
+\subsection{Dataset and Three-Regime Protocol}
+We use WOMD-derived scenes with Waymax-based closed-loop/counterfactual construction~\cite{ettinger2021large,gulino2023waymax}. Adaptation-train, development, certificate, and final-test roles are scene-disjoint. Safe, Near-Contact, and Contact are evaluation strata, not policy states. Safe measures nominal non-interference; Near-Contact emphasizes low-headroom pre-contact interaction and observation ambiguity; Contact contains contact/post-contact recovery, re-contact, and secondary-collision failure modes. No experiment in the V48.111 chain reconstructs or reselects the canonical dataset.
+
+\begin{table}[t]
+\centering
+\caption{Primary closed-loop endpoints used for the submission run.}
+\label{tab:regime_metrics}
+\begin{tabular}{p{0.17\linewidth}p{0.75\linewidth}}
+\toprule
+Stratum & Primary endpoints \\
+\midrule
+Safe & collision/off-road scene rate; bounded nominal-utility preservation (NUP); intervention rate \\
+Near-Contact & collision/off-road scene rate; 5th-percentile scene minimum clearance; 5th-percentile TTC; critical-TTC exposure duration; NUP; intervention rate \\
+Contact & terminal clearance; normalized post-contact free-space AUC; clearance gain; escape rate; re-contact rate; secondary-overlap rate; stable-stop quality; overlap duration; off-road rate \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+\subsection{Mechanism Evidence and Current Audit}
+The mechanism-development chain is intentionally fail-closed. Earlier factor interventions identify support establishment and deployability improvement as the dominant complementary decision states. Subsequent representation audits show that a candidate-invariant scene-conditioned orientation can improve one population while rotating in another. V48.110 therefore tests candidate-specific active-agent topology; it provides local ordering signal but fails the preregistered full Support/Reserve transfer gate. The current V48.111 audit removes the principal capacity confound of that test by comparing 188-D active-pair and 188-D nearest-pair constraint-response features under the same strictly convex closed-form ridge solver.
+
+The V48.111 null permutes candidate identity jointly with the candidate-induced topology/geometry within each scene-time group. This prevents the original candidate's active constraint from leaking into the shuffled control. Balanced and precision variants are retained for historical protocol compatibility, but identical raw-audit results are treated as duplicate protocol views rather than independent statistical replicates.
+
+\subsection{Submission-Time Full Closed-Loop Evaluation}
+The V48.111 repository is audit-oriented, so we additionally provide a submission evaluation harness that runs the frozen checkpoint and its frozen bucket-wise calibration end-to-end on Safe, Near-Contact, and Contact. CNRO remains offline: the harness does not insert its ridge solution into the deployed planner, does not finetune the checkpoint, and does not recalibrate thresholds. This distinction is essential for scientific validity: the final three-regime table evaluates the deployed frozen planner, while CNRO is reported as a representation/identifiability study.
+
+\begin{table*}[t]
+\centering
+\caption{Submission closed-loop results. Fill directly from \texttt{V48.111-SUBMISSION-THREE-REGIME-SUMMARY.csv}; no metric should be copied from mechanism-audit tables.}
+\label{tab:main_results}
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{llcccccccc}
+\toprule
+Variant & Regime & Collision$\downarrow$ & Off-road$\downarrow$ & NUP$\uparrow$ & Interv.$\downarrow$ & Clear.$\uparrow$ & TTC$\uparrow$ & Re-contact$\downarrow$ & Escape$\uparrow$ \\
+\midrule
+Balanced & Safe & -- & -- & -- & -- & -- & -- & -- & -- \\
+Balanced & Near & -- & -- & -- & -- & -- & -- & -- & -- \\
+Balanced & Contact & -- & -- & -- & -- & -- & -- & -- & -- \\
+Precision & Safe & -- & -- & -- & -- & -- & -- & -- & -- \\
+Precision & Near & -- & -- & -- & -- & -- & -- & -- & -- \\
+Precision & Contact & -- & -- & -- & -- & -- & -- & -- & -- \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+\subsection{Reporting Discipline}
+We distinguish three evidence levels: (i) information preservation, (ii) finite-sample accessibility under a fixed probe, and (iii) population-shared deployable action ordering. A lower audit loss is not a substitute for the third criterion. Likewise, final closed-loop results are not used to retroactively redefine the audit gates. External baselines are meaningful only after the deployed source/policy is frozen for the submitted model.
+
+\section{Conclusion}
+\label{sec:conclusion}
+OC-RAP treats recovery as a deployable action property under partial observation rather than a branch-wise oracle label. OC-MERO constrains recovery choice by observation compatibility, actuator projection makes recovery continuations executable, support--reserve complementarity provides one signed semantics before and after contact, and RIFA isolates absolute admission from relative ranking. The current representation evidence further sharpens the invariance principle: recovery orientation should be candidate-conditioned and constraint-native because the candidate itself changes which interaction limits recoverability. V48.111 tests this claim through nominal-zero signed constraint response with a dimension-matched active-vs-nearest causal control while keeping the deployed planner frozen. This separation between runtime mechanism and offline identifiability is deliberate. It allows Safe, Near-Contact, and Contact to remain one policy and one recoverability object---positive reserve before boundary loss and negative debt after violation---without regime routing or privileged future information.
+
+\appendices
+\section{Detailed Formulation and Reproducibility}
+\label{sec:appendix}
+
+\subsection{Executable Recovery Projection}
+A recovery option outputs desired acceleration and steering $(a_s^{\rm des},\delta_s^{\rm des})$. With step $\Delta t$, acceleration bounds $[a_{\min},a_{\max}]$, jerk limit $j_{\max}$, steering bound $\delta_{\max}$, and steering-rate bound $\dot\delta_{\max}$,
+\begin{align}
+ a_s &= \Pi_{[\max(a_{\min},a_{s-1}-j_{\max}\Delta t),\,\min(a_{\max},a_{s-1}+j_{\max}\Delta t)]}(a_s^{\rm des}),\\
+ \delta_s &= \Pi_{[\max(-\delta_{\max},\delta_{s-1}-\dot\delta_{\max}\Delta t),\,\min(\delta_{\max},\delta_{s-1}+\dot\delta_{\max}\Delta t)]}(\delta_s^{\rm des}).
+\end{align}
+This retains option identity while enforcing actuator feasibility by construction. It avoids interpreting a controllable command discontinuity as an environmental feasibility failure.
+
+\subsection{OC-MERO Lower-Tail Operator}
+For normalized weights $w_i$, the implementation uses stable sorting and fractional lower-tail mass. An equivalent variational form is
+\begin{equation}
+ \LCVaR_{\alpha}(\{s_i\};\{w_i\})=\max_{\nu\in\mathbb R}\left[\nu-\frac{1}{\alpha}\sum_iw_i[\nu-s_i]_+\right].
+\end{equation}
+For a fixed observation anchor $i$, OC-MERO first aggregates each option over observation-compatible roots using $\beta$-LCVaR, then takes the best valid option, and finally aggregates observation anchors using $\alpha$-LCVaR. The current mechanism chain uses $\alpha=\beta=0.2$ and fixed top-$M=8$ compatibility sparsification where enabled.
+
+A hidden-root oracle instead computes
+\begin{equation}
+ \widehat R_{\rm orc}(a)=\LCVaR_{\beta}(\{\max_\ell \hat m_{k\ell}(a)\};\{p_k\}),
+\end{equation}
+and the oracle gap is $\widehat G(a)=\widehat R_{\rm orc}(a)-\widehat R_{\rm dep}(a)$.
+
+\subsection{Native Recovery Certificate and Complementarity}
+Let $q_i^{\max}=\max_\ell q_{i\ell}$. Besides $D_h$ and $F$, the implementation records
+\begin{align}
+ D_s(a)&=\sum_i p_i\sigmoid(q_i^{\max}(a)/\tau_q),\\
+ Q_G(a)&=\exp(-[\widehat G(a)]_+).
+\end{align}
+The native certificate is $c(a)=[D_h,F,D_s,Q_G]$. $D_h=0$ is the shared-support existence boundary and $F=0.5$ is the $\widehat R_{\rm dep}=0$ boundary. The positive absolute predicate is non-compensatory: a candidate that destroys shared support cannot be rescued by another coordinate.
+
+\subsection{Teacher Physical Margin and Structural Contract}
+The pre-structural teacher physical margin is a signed minimum over active normalized constraints,
+\begin{equation}
+ m_{\rm phys}^{\star}(a,z,g)=\min_{q\in\mathcal Q_{\rm active}}\frac{b_q(\xi_{a,z,g})}{s_q}.
+\end{equation}
+The stored target is not unconditionally this pure minimum. The current generator may apply ordered structural operations: non-hidden \texttt{post\_contact\_stabilize}, \texttt{yield\_rejoin}, and \texttt{pull\_over} modes may receive a floor at $0.6$; blocked \texttt{yield\_rejoin} may be capped at $-0.8$; active \texttt{avoid\_secondary} may receive a floor at $0.9$; and deliberately mined hidden branches may use branch-specific hard replacement. Structural metadata is teacher/audit-side only. We therefore distinguish physical reserve/debt semantics from structural deployability semantics and do not describe the authoritative stored target as a pure physical slack minimum.
+
+\subsection{V48.111 Constraint-Native Recovery Orientation Audit}
+\label{app:cnro}
+The V48.111 audit is designed to isolate one hypothesis: \emph{the missing invariant is candidate-conditioned signed constraint response rather than raw active-agent identity}. It changes no deployed planner parameter.
+
+\subsubsection{Observation-only active geometry}
+The historical candidate pathway contains an 80-D prefix-state block. V48.111 uses the first eight complete 9-D prefix states and excludes the truncated ninth record, producing the registered early-action window. For each currently observed agent, current relative position, velocity, length, and width define a constant-velocity continuation. With circle radii $r_e,r_i$,
+\begin{equation}
+ h_{ij}^{a}=\|p_e^{a}(t_j)-p_i^{\rm CV}(t_j)\|-r_e-r_i.
+\end{equation}
+For each agent,
+\begin{equation}
+ h_i^{a}=\min_j h_{ij}^{a}.
+\end{equation}
+The active pair is the two agents with smallest $h_i^a$; the control pair is the two currently nearest agents. Neither selector uses teacher future, regime identity, or learned routing.
+
+\subsubsection{Nominal-zero constraint response}
+For candidate $a$ and nominal $a_0$,
+\begin{equation}
+ \Delta h_{ij}^{a}=h_{ij}^{a}-h_{ij}^{a_0}.
+\end{equation}
+To preserve boundary context without moving the physical zero boundary, V48.111 uses two channels per selected agent/time:
+\begin{equation}
+ \phi_{ij}^{(1)}=\frac{\Delta h_{ij}^{a}}{s_h},\qquad
+ \phi_{ij}^{(2)}=\frac{\Delta h_{ij}^{a}h_{ij}^{a_0}}{s_h^2},
+\end{equation}
+where $s_h$ is a train-only family-independent RMS scale. With two agents and eight times, each relational family adds 32 coordinates to the same 156-D raw candidate pathway, so
+\begin{equation}
+ d_{\rm nearest}=d_{\rm active}=156+2\times8\times2=188.
+\end{equation}
+This removes the V48.110 1716-D versus 3588-D capacity mismatch from the active-vs-nearest contrast.
+
+\subsubsection{Closed-form orientation probe}
+Support and Reserve are audited separately with the same float64 class-balanced ridge objective,
+\begin{equation}
+ \hat w=\argmin_w \sum_n \omega_n(y_n-x_n^\top w)^2+\lambda\|w\|_2^2,
+\end{equation}
+with $\lambda=1/N$. The problem is strictly convex and solved in closed form; there is no epoch, learning-rate, patience, rank, or width sweep. Consequently, optimization failure cannot explain a negative result.
+
+\subsubsection{Candidate-identity shuffle}
+Because the selected active pair is candidate-dependent, the null permutes the entire candidate identity inside each scene-time group rather than shuffling the 156-D response alone. Candidate response, active selection, nearest selection, and derived geometry move together. Scene context remains fixed. This tests whether candidate identity plus candidate-induced constraint response carries action information without leaking the original candidate's topology into the null.
+
+\subsubsection{Preregistered interpretation}
+Support/Reserve use the historical absolute AUC, true-minus-shuffle, and top-1 gates. In addition, V48.111 requires an active-switch increment: active-pair must outperform the equal-dimensional nearest-pair control across the registered Near/Contact development/certificate roles. Only joint Support+Reserve transfer and matched active-minus-nearest improvement can authorize promotion of a candidate-conditioned constraint-native carrier. Otherwise the fixed-CV circle geometry family is closed rather than widened or tuned.
+
+\subsection{Counterfactual Equivalence-Partition Transport}
+Let future instances be partitioned into equivalence classes $e$ from branch-defining semantic recipe and, for stochastic/augmented branches, stored exogenous realization. Let $c_{ke}$ and $n_{je}$ be candidate and nominal probability mass assigned to roots $k$ and $j$. For a shared class,
+\begin{equation}
+ \Pi_e(k,j)=\min(c_e,n_e)\frac{c_{ke}}{c_e}\frac{n_{je}}{n_e},\qquad \Pi=\sum_e\Pi_e.
+\end{equation}
+This transport is invariant to root-slot permutation and represents split/merge correspondence. Missing exogenous fingerprints are unresolved rather than silently matched. It is used only for offline identifiability diagnostics.
+
+\subsection{Closed or Diagnostic-Only Families}
+The mechanism record provides negative evidence that should not be converted into extra Main components. Closed/frozen primary fixes include option-wise scalar/typed gains, class-local/path-stop branches, repeated CV/CA and ball/box/hull/anchor/jerk sweeps, high-order signed-viability sweeps, repeated truth-floor/cap inverse refinement, frozen structured-tail width/rank/depth sweeps, generic root/action MLP replacement, proposal/top-$K$ expansion, premature boundary transport, relative-ranker modification before source freeze, regime routers/experts/thresholds/budgets, privileged-future inputs, and dataset reconstruction. V48.110 additionally closes raw active-agent-token topology as a complete mechanism; V48.111 tests only the constraint-native response hypothesis under an equal-dimensional causal control.
+
+\subsection{Code-Aligned Closed-Loop Metrics}
+\begingroup\footnotesize\sloppy
+Safe reports \path{collision_scene_rate}, \path{offroad_scene_rate}, \path{closed_loop_bounded_NUP}, and \path{intervention_rate}. Near-Contact additionally reports \path{scene_min_clearance_m_p05}, \path{scene_ttc_s_p05}, and \path{critical_ttc_exposure_duration_s}. Contact reports \path{post_contact_terminal_clearance_m}, \path{post_contact_free_space_auc_normalized_m}, \path{post_contact_clearance_gain_m}, \path{post_contact_escape_scene_rate}, \path{recontact_scene_rate}, \path{secondary_overlap_scene_rate}, \path{new_stable_stop_quality_scene_rate}, and \path{post_contact_overlap_duration_s}. The submission harness writes these values to a single machine-readable summary rather than mixing mechanism probes with final closed-loop metrics.
+\endgroup
+
+\bibliographystyle{IEEEtran}
+\bibliography{post-collision}
+
+\end{document}
