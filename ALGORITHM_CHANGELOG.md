@@ -12093,3 +12093,143 @@ V48.108 tests the next structural proposition: **before adding more interaction 
 - **Scientific correction.** Structural injectivity is now owned only by (1) full-column-rank of every frozen input projection and (2) the preregistered pseudoinverse reconstruction check. The FP32 block-map absolute discrepancy remains recorded, but is explicitly **diagnostic only** and cannot control GO/STOP branching.
 - **No algorithm change.** Raw pathway definition, projected token indices, target-specific probes, within-group permutation null, populations, thresholds, planner/Stage-I/root/source freeze, and all downstream branch rules are unchanged. This is an engineering/scientific-contract repair, not a new mechanism.
 - **Attribution rule.** Do not use the V48.108.0 `RAW_TO_PROJECTED_ACTION_PATHWAY_STRUCTURAL_STOP` for scientific branching. Rerun the same V48.108 command under v48.108.1 (cached feature extraction may be reused) and use only the regenerated comparison/pipeline artifacts.
+
+## V48.108.1 authoritative result — OC-RPAP raw-to-projected pathway audit
+
+### Reliability / attribution gate
+
+V48.108.1 is attribution-ready.  The uploaded comparison, pipeline, balanced/precision JSONs, PT probe states and runtime contract are byte-identical to the copies inside the uploaded audit archive.  Runtime SHA256 values match the uploaded V48.108.1 drop-in.  The PT files contain only raw/projected linear-probe states and normalization statistics; Stage-I, root decoder, source and planner parameters remain untouched.  V48.107 comparison/pipeline SHA256 prerequisites match the authoritative V48.107 STOP artifacts.
+
+The v48.108.1 structural-injectivity hotfix behaves as intended: every frozen candidate projector is full-column-rank and actual candidate deltas are pseudoinverse-reconstructable to relative L2 error around `1e-15`.  `projection_structural_injectivity=true`.  The scale-dependent FP32 block-map absolute discrepancy is diagnostic-only and no longer owns scientific branching.  No engineering rerun is required.
+
+### Strict preregistered decision
+
+Official status is **`RAW_ACTION_PATHWAY_STOP`**.
+
+- Raw Support: STOP.  Only balanced/precision dev-Near satisfy the full AUC+shuffle gate (`2/8`).  However raw Support top-1 lift is material in `6/8` cells (dev-Near, dev-Contact and certificate-Contact in both variants), showing substantial local within-group action ordering despite failed cross-population calibration.
+- Raw Reserve/debt: STOP.  No cell satisfies the full AUC+shuffle gate and no cell has material top-1 lift.
+- Projected Support: STOP (`2/8`, dev-Near only).
+- Projected Reserve/debt: STOP (`0/8`).
+- Projection structural injectivity: GO.  Therefore projection-preservation repair is closed.
+- The preregistered next branch is exactly **raw candidate x scene relational interaction audit**, with no model/source training.
+
+### What V48.108.1 establishes
+
+1. **Frozen input projection is not the information-destruction bottleneck.**  Each raw candidate group maps through a full-column-rank affine projector and the raw delta is reconstructable by pseudoinverse to numerical precision.  Candidate information cannot be literally deleted by these linear projectors.
+2. **Probe readability is not information existence.**  Raw and projected candidate paths are injectively related, yet independently fitted finite-sample regularized probes report different AUCs.  Therefore `linear-probe STOP != information-theoretic absence`, especially across invertible/injective reparameterizations.  Future attribution must distinguish structural information preservation from decoder conditioning/optimization.
+3. **Support already contains strong local action order but not population-invariant orientation.**  Raw dev-Near support reaches `AUC~0.852`, shuffle margin `~+0.508`, top-1 lift `+0.6`, while certificate-Near falls to `AUC~0.345` with negative shuffle margin.  The defect is not generic action blindness; it is transfer of signed orientation across observation populations.
+4. **The whole raw candidate-path probe does not expose Reserve/debt.**  This must be interpreted at the registered whole-path probe level, not as an information-theoretic claim: V48.106 had already shown a strong pre-encoder control-path Reserve signal.  Because control projection is injective, that signal is structurally present upstream even when the whole-path probe fails to identify it.  Nuisance coordinates / finite-probe conditioning therefore remain plausible.
+5. **The invariant object should be context-conditioned, not necessarily a constant global vector.**  Near support establishment and Contact debt repayment are action effects whose meaning depends on the static scene/interaction context.  A stronger formulation is a shared recovery-positive covector field `omega(c)` applied to candidate-minus-nominal response, rather than one context-free direction.
+
+### Near / Contact after V48.108.1
+
+- **Near:** raw candidate support is strong on dev-Near but collapses on certificate-Near; raw reserve is wrong-signed/absent.  State preservation remains a solved scaffold from V48.103/V48.104.  The open problem is context-conditioned support/reserve orientation transfer, not state-vs-response interference.
+- **Contact:** raw support retains some local top-1 signal, but certificate/global AUC is weak; raw reserve/debt is not exposed by the whole-path probe.  V48.107's certificate debt improvements and V48.106's control-path Reserve signal show that Contact debt information exists but requires better organization/conditioning.
+- The unified target remains a single candidate-minus-nominal signed recovery semantics.  No Near/Contact runtime router is authorized.
+
+### Family closures after V48.108.1
+
+Close the following as primary fixes for the current bottleneck:
+
+- input-projection preservation/width/rank sweeps;
+- additional Transformer capacity solely to recover information supposedly lost by projection;
+- more epoch/LR tuning of V48.107's first-block ordinal family;
+- source, boundary transport, regime routing and dataset reconstruction.
+
+The next family must test **candidate x scene relational orientation** while keeping representation/model parameters frozen.
+
+## V48.109 OC-RCSO — Raw Candidate-Scene Convex Relational Orientation Audit
+
+### Core hypothesis
+
+The current control-sufficiency target is refined from a context-free action direction into a context-conditioned but population-shared recovery orientation field:
+
+```text
+omega(c) = w + W c
+s(u,c)   = u^T omega(c) = <w,u> + <W, u c^T>
+```
+
+`u` is target-specific and nominal-zero:
+
+- Support: raw candidate-minus-nominal delta `d`;
+- Reserve/debt: `q = d * (1 + tanh(raw_nominal_state))`, retaining the signed state-conditioned reserve/debt semantics.
+
+`c` is a fixed candidate-invariant raw scene summary.  A single `(w,W)` must serve all Near/Contact and dev/certificate populations; no population/regime identifier is available to the score.
+
+### Fixed scene context and dimensions
+
+The context is fixed before results and uses no learned routing:
+
+```text
+agent_summary[8]
++ permutation-invariant raw agent mean/std/max/min[40]
++ BEV[14]
++ route[70]
++ map[70]
++ dynamics[38]
+= 240 dimensions.
+```
+
+The candidate response has `156` dimensions.  The registered relational feature is
+
+```text
+phi(u,c) = [u_scaled, vec(u_scaled outer c_standardized)]
+```
+
+with dimension `156 + 156*240 = 37,596`.  Candidate scaling is RMS-only (no centering), so `u=0` remains exactly zero and the nominal score is structurally zero.  Scene centering cannot break nominal zero because every relational term is multiplied by `u`.
+
+### Convex/unique solution owner
+
+To eliminate non-convex optimization ambiguity, V48.109 does not train a neural representation and does not use Adam/epochs.  For each axis it solves a class-balanced ridge orientation problem with labels in `{-1,+1}`:
+
+```text
+min_w  weighted_mean (x_i^T w - y_i)^2 + lambda ||w||^2
+lambda = 1 / N_axis
+```
+
+The positive ridge makes the objective strictly convex with a unique global optimum.  The implementation solves the exact sample-dual linear system in float64; it records the normal-equation residual.  There is no LR, epoch, lambda, rank, width or feature-selection sweep.
+
+### Causal control: base convex vs relational convex
+
+The same closed-form convex solver is applied to two preregistered feature families:
+
+1. `base`: candidate response `u` only;
+2. `relational`: `[u, u outer c]`.
+
+Both have identical train rows, labels, class balancing and within-group permutation-null construction.  This separates two explanations:
+
+- if convex `base` already GO, V48.108's whole-path STOP was predominantly probe optimization/conditioning rather than missing relation;
+- if `base` STOP but `relational` GO, candidate-scene interaction is the causal missing statistic within this fixed family.
+
+### V48.109 gates
+
+Support and Reserve/debt use the unchanged action gate for both base and relational families:
+
+```text
+AUC >= 0.65 AND true-minus-shuffled >= +0.05 in >=6/8 cells;
+>=3/4 roles with Near + Contact represented;
+top1 lift >= +0.10 in >=4/8 cells with Near + Contact represented.
+```
+
+The relational branch owns the candidate-scene sufficiency question; base is a solver/conditioning control.  No State gate is reopened because V48.109 is audit-only and nominal-state preservation was already established upstream.
+
+### V48.109 preregistered branches
+
+- **Convex base Support + Reserve GO:** raw candidate pathway is sufficient under the unique convex solver.  Do not add relational/Transformer capacity; authorize one nominal-invariant candidate-only convex response carrier.
+- **Relational Support + Reserve GO:** promote `context-conditioned recovery orientation field` as the supported mechanism principle and authorize one nominal-invariant context-conditioned response-carrier integration, no source/Transformer sweep.
+- **Relational Support GO, Reserve STOP:** preserve relational Support and audit one signed debt-flow relational structure only.
+- **Relational Reserve GO, Support STOP:** preserve relational Reserve and audit one Support-establishment constraint-topology mechanism only.
+- **Relational Support + Reserve STOP:** close the bilinear relational-orientation family and preregister a candidate-to-agent active-constraint/topology audit; do not increase generic encoder capacity.
+
+### Durable theory entering V48.109
+
+The evidence chain is now:
+
+`static sufficiency != control sufficiency`
+`+ parameter factorization != representation factorization`
+`+ response-loss reduction != cross-distribution control sufficiency`
+`+ action association != signed action equivariance`
+`+ within-domain ordinal improvement != population-invariant action orientation`
+`+ injective reparameterization preserves information but not finite-probe readability`.
+
+V48.109 tests a stronger constructive proposition: **deployable recovery orientation may be a context-conditioned covector field `omega(c)`, but the mapping from scene context to recovery-positive direction must itself be shared across observation populations.**  The strictly convex audit asks whether such a field exists in the fixed bilinear raw feature family without any non-convex optimization excuse.
