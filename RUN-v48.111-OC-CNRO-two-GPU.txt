@@ -1,0 +1,17 @@
+cd /home/senzeyu2/code/OC-RAP
+
+export PYTHONPATH="$PWD/src:$PWD${PYTHONPATH:+:$PYTHONPATH}"
+export PYTHONNOUSERSITE=1
+
+python tools/check_v48_111_runtime_code_contract.py \
+  --repo "$PWD" \
+  --output /home/senzeyu2/code/OC-RAP/runs/OC-RAP-v48.111-runtime-code-contract.manual.json
+
+GPU0=0 GPU1=1 \
+BASE_OUT=/home/senzeyu2/code/OC-RAP/runs \
+bash scripts/run_v48_111_dcp_drfc_bcde_rifa_cnro_two_gpu.sh
+
+# Upload after completion:
+# runs/OC-RAP-v48.111-CNRO-balanced.json
+# runs/OC-RAP-v48.111-CNRO-precision.json
+# runs/OC-RAP-v48.111-OC-CNRO-audits.zip

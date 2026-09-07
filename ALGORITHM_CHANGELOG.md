@@ -12349,215 +12349,168 @@ unique convex optimum != correct invariant function class
 
 The constructive hypothesis is sharpened to: **deployable control sufficiency requires a nominally anchored, population-shared active-constraint selection-and-orientation operator.**  Scene context may change the response, and the candidate itself may change which scene constraint is active; invariance belongs to the rule, not to a fixed axis or a fixed per-scene covector.
 
-## V48.110 authoritative result — OC-CATO candidate-to-agent topology audit
+## V48.110 authoritative result — OC-CATO candidate-agent topology audit
 
-### Reliability / attribution gate
+### Reliability / attribution
 
-V48.110 is engineering-valid and scientifically attributable.  The authoritative pipeline is
-`valid=true / attribution_ready=true / engineering_version=v48.110.0-OC-CATO / errors=[]`, with
-`test_roots_read=false`, `dataset_reconstruction=false`, no Stage-I/root/source/planner training,
-no regime conditioning and no boundary transport.  Runtime module SHA256 values match the delivered
-V48.110 code and all V48.110 result/audit copies are mutually SHA-consistent.  The dedicated V48.110
-tests pass 8/8; V48.106--110 selected regression passes 34/34.
+V48.110 is engineering-valid and scientifically attributable. The uploaded pipeline and runtime contracts are valid/attribution-ready with empty errors; runtime source SHA256 values match the delivered V48.110 code; balanced/precision JSON/PT/comparison/runtime artifacts match the top-level manifest; Stage-I/root/source/planner parameters trained = 0; `test_roots_read=false`; `dataset_reconstruction=false`; the closed-form ridge maximum normal-equation residual is `7.12e-12`. The registered Support/Reserve train rows are 159/61.
 
-Balanced and Precision produce exactly identical raw-feature audit metrics in V48.110.  This is not
-a rerun error: this audit consumes the same raw candidate/agent geometry and registered labels; the
-two checkpoints are provenance/materialization channels rather than statistically independent
-replicates.  Scientific interpretation therefore counts the four unique roles explicitly instead of
-using duplicated Balanced/Precision cells as independent evidence.
+### Preregistered scientific decision
 
-### Strict preregistered decision
+Official status is **`CANDIDATE_AGENT_TOPOLOGY_STOP`**. Topology Support has local-order signal but fails the formal action gate; Topology Reserve fails both formal and local-order gates. Main/source/Transformer/boundary modifications are not authorized.
 
-Official status is **`CANDIDATE_AGENT_TOPOLOGY_STOP`**.
+Unique role-level topology results (balanced and precision are numerically identical in this raw audit):
 
-- Topology Support: formal STOP.  The full AUC+shuffle gate passes only Dev-Near (duplicated across
-  Balanced/Precision), while the local top-1 lift is material in three unique roles: Dev-Near,
-  Dev-Contact and Certificate-Near.
-- Topology Reserve/debt: formal STOP and local-order STOP.  No role passes the full gate and no role
-  has material positive top-1 lift.
-- `nearest` is also STOP on both axes, so simply adding one local agent token is not a solution.
-- The exact registered branch is to close the **coordinatewise fixed-CV agent-token topology family**
-  and run one constraint-native candidate-agent geometry audit.  Source/Transformer training,
-  boundary transport, regime routing and dataset reconstruction remain unauthorized.
+- Support AUC / shuffle margin / top-1 lift:
+  - dev-Near `0.672 / +0.258 / +0.400`;
+  - dev-Contact `0.426 / +0.051 / +0.167`;
+  - certificate-Near `0.509 / +0.145 / +0.333`;
+  - certificate-Contact `0.499 / -0.016 / 0.000`.
+- Reserve AUC / shuffle margin / top-1 lift:
+  - dev-Near `0.000 / -0.375 / 0.000` (only 1 powered group; underpowered);
+  - dev-Contact `0.432 / +0.120 / -0.400`;
+  - certificate-Near `0.690 / -0.024 / -0.333`;
+  - certificate-Contact `0.361 / -0.181 / -0.250`.
 
-Representative held-out AUCs (Balanced and Precision are identical):
+### What V48.110 does and does not establish
 
-```text
-                         Base       Nearest    Topology
-Support Dev Near         0.7578     0.5938     0.6719
-Support Cert Near        0.1091     0.4182     0.5091
-Support Dev Contact      0.6364     0.4659     0.4261
-Support Cert Contact     0.4713     0.3357     0.4991
+1. **No promotion of the complete candidate-conditioned active-constraint recovery-orientation mechanism.** The preregistered Full-GO condition is not met, so the V48.97/V48.100 recovery base-state chart remains frozen and is not replaced by a topology carrier.
+2. **The Near/Contact unification hypothesis is not falsified.** V48.110 falsifies the particular sufficient statistic `fixed-CV circle active owner + raw agent token interaction`; it does not falsify a single signed reserve/debt mechanism across Near/Contact.
+3. **Candidate-conditioned switching remains a supported premise, not a solved mechanism.** Relative to the nearest-agent control, topology AUC is positive in 3/4 unique Support roles and 3/4 unique Reserve roles, including large certificate-Near Reserve `+0.381`; this is useful directional evidence but cannot cross the registered absolute/shuffle/selectivity gates.
+4. **The candidate-identity shuffle is scientifically correct.** Candidate response and its selected topology are permuted together within scene-time groups, so original candidate topology is not leaked into the null. It remains a single deterministic cyclic null, so small-group margins (especially Reserve dev-Near) must not be overinterpreted.
+5. **The first eight complete prefix states are a clean attribution window, not proof of full-horizon sufficiency.** They avoid the truncated ninth row of the fixed 80-D historical block while preserving the registered ~0.8 s early action response window. The horizon remains frozen in the next audit.
 
-Reserve Dev Near         1.0000     0.0000     0.0000
-Reserve Cert Near        0.1429     0.3095     0.6905
-Reserve Dev Contact      0.5104     0.2760     0.4323
-Reserve Cert Contact     0.4861     0.3056     0.3611
-```
+### Important correction to the V48.110 causal-control wording
 
-Topology minus Nearest is positive in 3/4 unique roles on Support and 3/4 on Reserve, so candidate-
-conditioned active switching contains real information.  However its shuffle/selectivity behavior is
-not population-invariant, especially for Reserve/debt, and therefore the registered mechanism cannot
-be promoted.
-
-### Important causal correction after V48.110
-
-The V48.109/V48.110 closed-form ridge fits remove optimizer/local-minimum/LR/epoch explanations, but
-**strict convexity does not by itself separate representation misspecification from finite-sample
-accessibility**.  V48.110 uses 3,588 topology features with only 159 Support and 61 Reserve training
-rows (`d/N ~= 22.6` and `58.8`, respectively), while the Base is 156-D.  The very low training
-objective of Topology together with unstable held-out transfer is therefore evidence for poor
-inductive geometry/generalization, not evidence that more capacity is required.  Do not interpret the
-unique optimum as proof that the high-level active-constraint principle is false.
-
-A second terminology correction is required.  V48.110 selects the first/second **active agents by a
-single circle-clearance proxy**.  It does not identify the complete active constraint type among
-clearance/stopping/control/stability/route/re-entry, nor does it represent the constraint normal or
-normal flow.  Therefore V48.110 tests a coordinatewise active-agent topology surrogate, not the final
-candidate-conditioned active-constraint theorem.
-
-### Mechanism interpretation
-
-1. The first eight complete prefix states do establish genuine candidate-conditioned switching: a
-   different candidate path can make a different observed agent limiting without teacher future or a
-   regime label.  This is retained.
-2. The Nearest control shows that arbitrary local-agent relation is insufficient.
-3. Topology's 3/4-vs-Nearest AUC improvement on each axis shows that active-set selection is a better
-   premise than nearest-agent context, but the raw 10-D agent-token outer product is not a transferable
-   coordinate system.
-4. Candidate-identity shuffle is a valid null because candidate response and candidate-induced active
-   topology are permuted together; the scene agent set is fixed.  Support retains real candidate-
-   specific local order; Reserve does not under the current coordinatewise representation.
-5. Fixed-CV circle geometry and eight early prefix states are now an intentional *audit scaffold*, not
-   a promoted physical model.  If the next low-dimensional constraint-native coordinates also STOP,
-   the branch must move to constraint-type ownership rather than adding agents, width, rank, lambda or
-   another generic relation head.
-
-### Promotion / Main-stack decision
-
-Do **not** promote V48.110 to `candidate-conditioned active-constraint recovery orientation` and do
-**not** replace the current Main-stack recovery base-state chart yet.  Retain instead the working theory:
+The three V48.110 families use the same strictly-convex closed-form solver, but they are **not capacity matched**:
 
 ```text
-population-invariant object
-= same candidate-conditioned constraint selection/response rule,
-  not one fixed axis, not one scene-wide axis, and not a raw coordinatewise agent-token field.
+base     156 dims
+nearest 1716 dims
+topology 3588 dims
+
+Support train rows 159
+Reserve train rows  61
 ```
 
-Near/Contact unification remains open and is not contradicted.  A single signed constraint coordinate
-can represent positive reserve near the boundary and negative debt after crossing it; the missing issue
-is the candidate-specific response of the controlling constraint, not a runtime regime router.
+Thus the experiment does eliminate optimizer/LR/local-minimum confounding, but it does **not** eliminate feature-dimension/kernel-complexity/conditioning confounding. A hypothetical `Topology > Nearest` contrast cannot by itself prove active switching. V48.111 fixes this directly with an equal-dimensional active-vs-nearest geometry contrast.
 
-## V48.111 OC-CNGO — Constraint-Native Geometry Orientation Audit
+### Theory update after V48.110
 
-### Purpose
-
-V48.111 follows the exact V48.110 STOP branch.  It asks one question only:
-
-> Was V48.110 failing because candidate-conditioned active switching is wrong, or because the active
-> constraint was represented in raw global agent-token coordinates rather than in its native signed
-> boundary coordinates?
-
-No model/source capacity is added.  The same V48.109/V48.110 closed-form class-balanced ridge solver
-with `lambda=1/N_axis` is retained, and the same first eight complete prefix states plus current-
-observation fixed-CV agent continuation remain frozen so temporal/prediction changes cannot confound the
-coordinate-system intervention.
-
-### Constraint-native coordinates
-
-For candidate prefix `a`, observed agent `j`, and prefix time `t`, define the same circle signed gap
-used by the V48.110 selector:
+The V48.109 statement
 
 ```text
-r_j^a(t) = p_ego^a(t) - p_j^CV(t)
-h_j^a(t) = ||r_j^a(t)|| - r_ego - r_j
-n_j^a(t) = r_j^a(t) / ||r_j^a(t)||
-hdot_j^a(t) = n_j^a(t)^T (v_ego^a(t) - v_j)
+candidate-invariant scene orientation is too restrictive
 ```
 
-`hdot > 0` means opening separation and `hdot < 0` means closing.  Candidate and nominal each select
-their first/second active agent-time pair by minimum signed gap.  Exact ties use observable agent-token
-content as a deterministic tie-break so physical selection is invariant to input slot permutation.
-
-At four registered pairs — candidate active1/active2 and nominal active1/active2 — construct:
+remains supported, but V48.110 shows that **active-agent identity is not equivalent to active-constraint geometry**. In constrained optimization, the active set identifies boundary owners, while the local feasible/recovery direction is determined by signed constraint response / gradients (normal-cone geometry), not by the raw object descriptor alone. The new working object is therefore:
 
 ```text
-g_gap  = h_candidate - h_nominal       [4]
-g_flow = hdot_candidate - hdot_nominal [4]
+population-shared candidate-conditioned constraint-response operator
 ```
 
-The same agent and time are used on both sides of each difference.  These quantities are:
-
-- candidate-minus-nominal and therefore exactly zero for the nominal action;
-- translation/rotation invariant scalar boundary coordinates;
-- independent of agent slot identity;
-- observation-only and free of teacher future / regime labels.
-
-RMS-only scaling is used without mean subtraction so the physical zero boundary is preserved exactly.
-
-### Nested convex families
-
-Three fixed families use identical rows, labels, balanced weights and closed-form ridge solver:
+rather than:
 
 ```text
-Base : [u]                          dim 156
-Gap  : [u, g_gap]                   dim 160
-Flow : [u, g_gap, g_flow]           dim 164
+population-shared candidate-conditioned raw-agent orientation.
 ```
 
-This reduces the V48.110 topology dimension from 3,588 to 160/164 instead of attempting a wider agent
-relation model.  `Gap` tests signed constraint-displacement response.  `Flow-Gap` cleanly tests whether
-first-order normal response adds information.  No outer-product rank/width, lambda, LR, threshold or
-feature-selection sweep is permitted.
-
-### Candidate-identity shuffle
-
-Within each scene-time group, the permutation null jointly permutes:
+Near and Contact remain two signs/states of the same recovery object:
 
 ```text
-(u, g_gap, g_flow)
+Near:    preserve / increase positive constraint reserve
+Contact: repay negative constraint debt and cross back to nonnegative reserve
 ```
 
-as one candidate identity.  Scene-static inputs remain fixed.  The null therefore asks whether the
-specific candidate-induced constraint response matters, not whether a scene is generally difficult.
+### Families closed after V48.110
 
-### V48.111 primary gate
+Close as primary fixes:
 
-Because Balanced/Precision are not independent statistical replicates for this audit, the primary gate
-is role-based.  A unique role passes an axis only if **both** variants satisfy:
+- fixed-CV coordinatewise raw active-agent topology carrier as a complete Main mechanism;
+- raw `u outer agent-token` width/rank expansion;
+- nearest-agent raw relation expansion;
+- topology gain/LR/lambda/epoch/threshold sweeps;
+- replacing the recovery base-state chart with V48.110 topology;
+- source/Transformer/boundary/regime-router changes before a constraint-native geometry audit.
+
+Do **not** close candidate-conditioned active switching as a high-level premise; test it with a constraint-native, capacity-matched contrast first.
+
+## V48.111 OC-CNRO — Constraint-Native Recovery Orientation Audit
+
+### Registered scientific question
+
+Does a candidate-conditioned **signed active-constraint response**, rather than raw active-agent identity, provide a population-shared Support/Reserve orientation across Near/Contact and dev/certificate?
+
+For candidate `a`, nominal candidate `a0`, observed agent `i`, and the same first eight complete prefix states / observation-only CV continuation as V48.110, compute the signed circle-clearance path
 
 ```text
-AUC >= 0.65
-AND true-minus-shuffle >= +0.05.
+h_i^a(t)
 ```
 
-Formal axis GO additionally requires:
+and the action-induced constraint response
 
 ```text
->= 3/4 unique roles pass, spanning Near and Contact;
->= 2/4 unique roles have top1 lift >= +0.10, spanning Near and Contact.
+Delta h_i^a(t) = h_i^a(t) - h_i^a0(t).
 ```
 
-The legacy 8-cell counts remain reported as diagnostics but do not manufacture evidence by duplicating
-Balanced/Precision.
+This is nominal-zero by construction and is a finite-action analogue of the local constraint-normal response `grad h · Delta p`.
 
-### V48.111 preregistered branches
+A second channel preserves boundary context without a threshold:
 
-- **Flow Support + Reserve GO:** promote `candidate-conditioned constraint-native recovery orientation`
-  and authorize one nominal-invariant Main-carrier integration; still no generic capacity sweep.
-- **Gap Support + Reserve GO while Flow is unnecessary:** promote the simpler signed-gap response and
-  retain normal flow as diagnostic only.
-- **Support GO / Reserve STOP:** do not tune geometry; audit which *constraint type* owns negative debt
-  (clearance vs route/stopping/re-entry/etc.) with the same unified policy semantics.
-- **Reserve GO / Support STOP:** audit support-establishment constraint switching only.
-- **Both axes local-order-only:** one convex pairwise ranking audit with exactly the same coordinates.
-- **Otherwise STOP:** close the fixed-CV circle-agent geometry branch and move to a constraint-type-owner
-  geometry audit.  Do not add more active agents, token dimensions, rank, network capacity or sweeps.
+```text
+(Delta h / s_h) * (h_nominal / s_h)
+```
 
-### Continuing exclusions
+where `s_h` is a train-only, family-independent RMS scale. No centering moves the physical zero boundary.
 
-All historical closures remain active: regime router/expert/threshold/budget; source or broad encoder
-retraining; generic AFE/MLP; proposal/top-K or unsupported option expansion; class-local/path-stop Main;
-post-hoc hard control veto; external ball/box/hull/anchor/jerk and B1/B2 sweeps; scalar/typed gain
-transport; frozen tail-field capacity sweeps; truth-floor/switch-inverse refinement; boundary transport;
-relative-ranker modification before source freeze; and dataset reconstruction.
+### Dimension-matched causal controls
+
+Both relational families append exactly the same 32-D geometry to the historical 156-D response coordinate:
+
+```text
+2 selected agents × 8 prefix times × 2 channels = 32
+156 + 32 = 188 dims
+```
+
+- `nearest_pair`: the two currently nearest observed agents, candidate-invariant selector;
+- `active_pair`: the two agents with minimum candidate-specific signed clearance, candidate-conditioned selector.
+
+Therefore:
+
+```text
+active_pair - nearest_pair
+```
+
+is a true **188-D vs 188-D** selector/geometry contrast. V48.110's 1716-vs-3588 width confound is removed.
+
+The base family remains the exact V48.109/V48.110 156-D candidate response and is required to reproduce the authoritative base AUC exactly.
+
+### Fixed owner and null
+
+- same V48.109 float64 class-balanced closed-form ridge;
+- `lambda = 1/N`, unique strict convex optimum;
+- no iterative optimizer/LR/epoch/rank/width sweep;
+- whole candidate-identity cyclic shuffle inside each scene-time group;
+- no teacher future, hidden root, regime ID, learned router, source update, boundary transport or dataset reconstruction;
+- same first eight complete prefix states and same CV external continuation as V48.110.
+
+Balanced/precision are retained for historical protocol compatibility, but V48.111 explicitly reports whether their raw-audit metrics are exact duplicates and reports an effective unique-role count to prevent pseudo-replication in interpretation.
+
+### Preregistered decision order
+
+1. Engineering/provenance/base-identity/matched-dimension gates must pass.
+2. Judge `nearest_pair` and `active_pair` with the historical Support/Reserve AUC + shuffle + top-1 gate.
+3. Independently require an active-switch increment gate: `active - nearest > 0` in at least 6/8 legacy cells (>=3/4 unique roles with Near+Contact) and at least 4/8 legacy cells `>= +0.01`.
+4. Full mechanism GO requires **both Support and Reserve active gates plus both matched active-minus-nearest increment gates**.
+5. If both axes formal STOP but both retain the historical local-order gate, allow one pairwise audit with the same features only.
+6. Otherwise close the fixed-CV circle candidate-agent geometry family and move to a heterogeneous active-constraint normal-cone/Jacobian audit (clearance/route/stopping/re-entry), not another raw-agent or capacity sweep.
+
+### Promotion rule
+
+Only `CONSTRAINT_NATIVE_ACTIVE_GEOMETRY_BOTH_AXES_GO` authorizes promotion of:
+
+```text
+candidate-conditioned constraint-native recovery orientation
+```
+
+and exactly one nominal-invariant response-carrier integration. Until then the historical recovery base-state chart remains Main and no source/Transformer/boundary/router modification is authorized.
