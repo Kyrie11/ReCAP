@@ -1,0 +1,18 @@
+{
+  "near_context_only_ms": 0.617068999872572,
+  "near_full_profiles_context_ms": 4.852504000155022,
+  "dr_cvar_select_ms": 4.420764000315103,
+  "cpsf_select_ms": 3.4290809999220073,
+  "integrated_pso_scalar_ms": 193.87546299958558,
+  "integrated_pso_batch_ms": 109.48526300035155,
+  "tvlqr_riccati_scalar_ms": 62.97222299963323,
+  "tvlqr_riccati_batch_ms": 6.640254999638273,
+  "tvlqr_allocator_scalar_ms": 67.3339679997298,
+  "tvlqr_allocator_batch_ms": 16.083437999895978,
+  "integrated_end_to_end_select_ms": 108.30311300014728,
+  "tvlqr_end_to_end_select_ms": 39.7887589997481,
+  "integrated_pso_speedup": 1.7707904944153356,
+  "tvlqr_riccati_speedup": 9.483404327554233,
+  "tvlqr_allocator_speedup": 4.1865407135069805,
+  "near_avoided_profile_speedup": 7.8637948125040955
+}

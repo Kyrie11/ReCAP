@@ -1,0 +1,938 @@
+{
+  "schema_version": 3,
+  "regimes": [
+    "safe",
+    "near",
+    "contact"
+  ],
+  "reporting_rule": "Main-table methods are six per regime. Candidate-lattice adaptations must not be described as author-official or native benchmark reproductions.",
+  "main_table_by_regime": {
+    "safe": [
+      "gameformer_lite",
+      "plantf",
+      "pluto",
+      "pdm_closed",
+      "pdm_hybrid",
+      "idm"
+    ],
+    "near": [
+      "marc_lite",
+      "racp_lite",
+      "robust_scenario_mpc",
+      "predictive_safety_filter",
+      "dr_cvar_safety_filter",
+      "conformal_predictive_safety_filter"
+    ],
+    "contact": [
+      "postimpact_mpc_lite",
+      "post_crash_braking",
+      "postimpact_motion_tvlqr",
+      "post_collision_restoration",
+      "compensatory_postimpact_mpc",
+      "robust_postimpact_control"
+    ]
+  },
+  "legacy_or_diagnostic_by_regime": {
+    "safe": [
+      "nominal_replay",
+      "wayformer_bc",
+      "betopnet_lite"
+    ],
+    "near": [
+      "gameformer_lite",
+      "expected_risk_filter",
+      "cvar_risk_filter",
+      "dro_cvar_filter",
+      "oracle_recovery_filter"
+    ],
+    "contact": [
+      "severity_minimization"
+    ]
+  },
+  "baselines": [
+    {
+      "canonical_name": "nominal_replay",
+      "aliases": [
+        "nominal",
+        "nominal_replay",
+        "log_replay"
+      ],
+      "regimes": [
+        "safe"
+      ],
+      "paper_title": "Logged trajectory replay (dataset control; not a paper implementation)",
+      "paper_year": null,
+      "paper_url": null,
+      "official_code_url": null,
+      "implementation_kind": "dataset control",
+      "fidelity": "exact",
+      "core_retained": [
+        "replays the logged nominal candidate"
+      ],
+      "known_gaps": [],
+      "reporting_name": "Logged nominal replay",
+      "main_regimes": [],
+      "legacy_or_diagnostic_regimes": [
+        "safe"
+      ],
+      "table_role": "legacy/control/diagnostic"
+    },
+    {
+      "canonical_name": "wayformer_bc",
+      "aliases": [
+        "route_bc",
+        "route_bc_lite",
+        "waymax_bc",
+        "waymax_bc_lite",
+        "wayformer_bc",
+        "wayformer_style_bc",
+        "route_bc_wayformer"
+      ],
+      "regimes": [
+        "safe"
+      ],
+      "paper_title": "Wayformer: Motion Forecasting via Simple & Efficient Attention Networks",
+      "paper_year": 2022,
+      "paper_url": "https://arxiv.org/abs/2207.05844",
+      "official_code_url": null,
+      "implementation_kind": "WOMD candidate-lattice architecture adaptation",
+      "fidelity": "mechanism-inspired adaptation",
+      "core_retained": [
+        "factorized candidate tokens",
+        "Transformer scene fusion",
+        "latent-query compression and cross-attention",
+        "route-conditioned candidate scoring"
+      ],
+      "known_gaps": [
+        "not the authors' forecasting data pipeline",
+        "no official released checkpoint/backend",
+        "candidate classification replaces the original multimodal trajectory output"
+      ],
+      "reporting_name": "Wayformer-style route BC",
+      "main_regimes": [],
+      "legacy_or_diagnostic_regimes": [
+        "safe"
+      ],
+      "table_role": "legacy/control/diagnostic"
+    },
+    {
+      "canonical_name": "gameformer_lite",
+      "aliases": [
+        "gameformer",
+        "gameformer_lite",
+        "gameformer_levelk"
+      ],
+      "regimes": [
+        "safe",
+        "near"
+      ],
+      "paper_title": "GameFormer: Game-theoretic Modeling and Learning of Transformer-based Interactive Prediction and Planning for Autonomous Driving",
+      "paper_year": 2023,
+      "paper_url": "https://arxiv.org/abs/2303.05760",
+      "official_code_url": "https://github.com/MCZhi/GameFormer",
+      "implementation_kind": "source-derived WOMD-to-common-lattice port",
+      "fidelity": "source-ported / interface-adapted",
+      "core_retained": [
+        "8-state two-layer LSTM actor encoder",
+        "256-d six-layer Transformer scene fusion",
+        "six-mode GMM decoder",
+        "joint multi-agent level-k interaction refinement",
+        "detached previous-level future encoder",
+        "deep level-wise trajectory loss",
+        "trajectory-to-executable-candidate projection"
+      ],
+      "known_gaps": [
+        "OC-RAP observable preprocessing replaces the author's released tensors",
+        "the official public repository provides WOMD interaction prediction/open-loop planning rather than a drop-in Waymax/WOMD closed-loop planner",
+        "global ego-centric WOMD map tokens replace actor-indexed GameFormer lane tensors",
+        "the common interface supplies a 20-step executable prefix rather than the native 80-step target",
+        "OC-RAP does not expose native all-neighbor future targets to this adapter so source-native GMM supervision is ego-only",
+        "not checkpoint-compatible with the official repository"
+      ],
+      "reporting_name": "GameFormer (source-ported)",
+      "main_regimes": [
+        "safe"
+      ],
+      "legacy_or_diagnostic_regimes": [
+        "near"
+      ],
+      "table_role": "main: safe; legacy/diagnostic: near"
+    },
+    {
+      "canonical_name": "plantf",
+      "aliases": [
+        "plantf",
+        "plan_tf",
+        "plantf_adapter"
+      ],
+      "regimes": [
+        "safe"
+      ],
+      "paper_title": "Rethinking Imitation-based Planner for Autonomous Driving",
+      "paper_year": 2024,
+      "paper_url": "https://arxiv.org/abs/2309.10443",
+      "official_code_url": "https://github.com/jchengai/planTF",
+      "implementation_kind": "source-derived nuPlan-to-WOMD port",
+      "fidelity": "source-ported / interface-adapted",
+      "core_retained": [
+        "128-d four-layer scene Transformer",
+        "nine-channel actor-history encoding",
+        "six-channel state attention with 0.75 state dropout",
+        "source-shaped six-mode trajectory decoder",
+        "best-ADE SmoothL1 plus mode classification",
+        "source AdamW decay split and warmup-cosine schedule",
+        "trajectory-to-executable-candidate projection"
+      ],
+      "known_gaps": [
+        "nuPlan feature builder/map object classes are reconstructed from observable WOMD tensors",
+        "the WOMD-derived contract exposes 11 history steps rather than the native 21-step PlanTF history",
+        "source_max_agents=16 is an explicit speed cap below the public feature-builder maximum of 32; retained neighbors are chosen by observed current distance as in the source builder",
+        "NATTEN NeighborhoodAttention1D is replaced by a dependency-free local-convolution FPN with the same three-level topology",
+        "the common interface truncates the native 80-step horizon to 20 executable steps",
+        "native auxiliary future-agent prediction loss is unavailable because OC-RAP external samples do not carry that target",
+        "not checkpoint-compatible with official weights"
+      ],
+      "reporting_name": "PlanTF (source-ported)",
+      "main_regimes": [
+        "safe"
+      ],
+      "legacy_or_diagnostic_regimes": [],
+      "table_role": "main: safe"
+    },
+    {
+      "canonical_name": "pluto",
+      "aliases": [
+        "pluto",
+        "pluto_adapter"
+      ],
+      "regimes": [
+        "safe"
+      ],
+      "paper_title": "PLUTO: Pushing the Limit of Imitation Learning-based Planning for Autonomous Driving",
+      "paper_year": 2024,
+      "paper_url": "https://arxiv.org/abs/2404.14327",
+      "official_code_url": "https://github.com/jchengai/pluto",
+      "implementation_kind": "source-derived nuPlan-to-WOMD port",
+      "fidelity": "source-ported / interface-adapted",
+      "core_retained": [
+        "128-d four-layer source-style scene encoder",
+        "reference-line x 12-mode four-layer planning decoder",
+        "reference-to-reference/mode-to-mode/scene cross attention",
+        "global reference-mode probability selection",
+        "source-shaped trajectory regression plus flattened classification",
+        "source AdamW decay split and warmup-cosine schedule"
+      ],
+      "known_gaps": [
+        "nuPlan reference-line/map builders are replaced by observable WOMD vectors and the common executable candidate prefixes",
+        "the WOMD-derived contract exposes 11 history steps rather than the native 21-step PLUTO history",
+        "source_max_agents=16 is an explicit speed cap below the public feature-builder maximum of 48; retained neighbors are chosen by observed current distance",
+        "NATTEN temporal attention is replaced by a dependency-free local-convolution FPN",
+        "native 80-step horizon is truncated to 20 executable steps",
+        "the public trainer defaults contrastive loss off and this port therefore does not fabricate triplets",
+        "native ESDF collision loss and auxiliary agent-future loss are not reproduced because their source targets/geometry are unavailable",
+        "not checkpoint-compatible with official weights"
+      ],
+      "reporting_name": "PLUTO (source-ported)",
+      "main_regimes": [
+        "safe"
+      ],
+      "legacy_or_diagnostic_regimes": [],
+      "table_role": "main: safe"
+    },
+    {
+      "canonical_name": "pdm_closed",
+      "aliases": [
+        "pdm_closed",
+        "pdm_closed_adapter"
+      ],
+      "regimes": [
+        "safe"
+      ],
+      "paper_title": "Parting with Misconceptions about Learning-based Vehicle Motion Planning",
+      "paper_year": 2023,
+      "paper_url": "https://arxiv.org/abs/2306.07962",
+      "official_code_url": "https://github.com/autonomousvision/tuplan_garage",
+      "implementation_kind": "source-scorer projection onto common executable lattice",
+      "fidelity": "source-structure / geometry-adapted",
+      "core_retained": [
+        "PDMScorer multiplicative safety gate",
+        "gated progress normalization",
+        "source 5/5/2 progress-TTC-comfort weighted aggregation",
+        "route-progress/direction/drivable observable proxies",
+        "non-learning closed-loop selection"
+      ],
+      "known_gaps": [
+        "BatchIDMPolicy plus lateral-offset proposal generation and kinematic simulation are replaced by the shared OC-RAP executable proposals",
+        "nuPlan polygon at-fault/drivable/direction and exact TTC geometry are approximated from WOMD route/predicted occupancy",
+        "PDM emergency-brake override is not independently reconstructed"
+      ],
+      "reporting_name": "PDM-Closed (source-scorer port)",
+      "main_regimes": [
+        "safe"
+      ],
+      "legacy_or_diagnostic_regimes": [],
+      "table_role": "main: safe"
+    },
+    {
+      "canonical_name": "pdm_hybrid",
+      "aliases": [
+        "pdm_hybrid",
+        "pdm_hybrid_adapter"
+      ],
+      "regimes": [
+        "safe"
+      ],
+      "paper_title": "Parting with Misconceptions about Learning-based Vehicle Motion Planning",
+      "paper_year": 2023,
+      "paper_url": "https://arxiv.org/abs/2306.07962",
+      "official_code_url": "https://github.com/autonomousvision/tuplan_garage",
+      "implementation_kind": "source short-horizon semantics projected onto common executable lattice",
+      "fidelity": "source-faithful within executed prefix / long-horizon tail unavailable",
+      "core_retained": [
+        "PDM-Closed proposal selection semantics",
+        "source correction-horizon contract: uncorrected PDM-Closed trajectory through 2.0 s",
+        "non-learning current action under the OC-RAP short-prefix replan protocol"
+      ],
+      "known_gaps": [
+        "the learned PDM-Offset tail after the 2.0 s correction horizon is not observable in the current 2 s executed-prefix comparison",
+        "therefore PDM-Hybrid is intentionally expected to match PDM-Closed on current-action metrics",
+        "a faithful hybrid advantage requires an 8 s trajectory target/evaluation path rather than a learned logit that changes the pre-2 s action"
+      ],
+      "reporting_name": "PDM-Hybrid (source prefix semantics)",
+      "main_regimes": [
+        "safe"
+      ],
+      "legacy_or_diagnostic_regimes": [],
+      "table_role": "main: safe"
+    },
+    {
+      "canonical_name": "idm",
+      "aliases": [
+        "idm",
+        "idm_planner"
+      ],
+      "regimes": [
+        "safe"
+      ],
+      "paper_title": "Congested Traffic States in Empirical Observations and Microscopic Simulations (Intelligent Driver Model)",
+      "paper_year": 2000,
+      "paper_url": "https://doi.org/10.1103/PhysRevE.62.1805",
+      "official_code_url": null,
+      "implementation_kind": "finite-lattice IDM control projection",
+      "fidelity": "equation-core adaptation",
+      "core_retained": [
+        "IDM desired acceleration",
+        "front-gap and relative-speed interaction",
+        "comfortable headway/deceleration parameters"
+      ],
+      "known_gaps": [
+        "continuous IDM acceleration is projected onto the nearest feasible executable candidate",
+        "lateral path choice comes from the common candidate set"
+      ],
+      "reporting_name": "IDM projection",
+      "main_regimes": [
+        "safe"
+      ],
+      "legacy_or_diagnostic_regimes": [],
+      "table_role": "main: safe"
+    },
+    {
+      "canonical_name": "betopnet_lite",
+      "aliases": [
+        "betop",
+        "betop_lite",
+        "betopnet",
+        "betopnet_lite"
+      ],
+      "regimes": [
+        "safe"
+      ],
+      "paper_title": "Reasoning Multi-Agent Behavioral Topology for Interactive Autonomous Driving",
+      "paper_year": 2024,
+      "paper_url": "https://arxiv.org/abs/2409.18031",
+      "official_code_url": "https://github.com/OpenDriveLab/BeTop",
+      "implementation_kind": "WOMD candidate-lattice topology adaptation",
+      "fidelity": "mechanism-inspired adaptation",
+      "core_retained": [
+        "actor and map topology encoders",
+        "iterative topology decoding",
+        "topology-guided sparse attention",
+        "topology auxiliary supervision",
+        "candidate policy scoring"
+      ],
+      "known_gaps": [
+        "not checkpoint-compatible with official code",
+        "the public repository releases the WOMD prediction pipeline while its nuPlan planning release remains marked TODO",
+        "OC-RAP topology labels replace official preprocessing",
+        "candidate selector replaces the unreleased full planning stack"
+      ],
+      "reporting_name": "BeTop topology-aware adapter",
+      "main_regimes": [],
+      "legacy_or_diagnostic_regimes": [
+        "safe"
+      ],
+      "table_role": "legacy/control/diagnostic"
+    },
+    {
+      "canonical_name": "marc_lite",
+      "aliases": [
+        "marc",
+        "marc_lite",
+        "marc_contingency"
+      ],
+      "regimes": [
+        "near"
+      ],
+      "paper_title": "MARC: Multipolicy and Risk-aware Contingency Planning for Autonomous Driving",
+      "paper_year": 2023,
+      "paper_url": "https://arxiv.org/abs/2308.12021",
+      "official_code_url": null,
+      "implementation_kind": "finite-lattice contingency adaptation",
+      "fidelity": "mechanism-inspired adaptation",
+      "core_retained": [
+        "semantic multi-policy families",
+        "dynamic non-anticipative shared prefix",
+        "scenario-tail branching",
+        "expected/CVaR risk tolerance",
+        "constrained policy-family representative selection"
+      ],
+      "known_gaps": [
+        "continuous nonlinear optimization is replaced by executable candidate prefixes",
+        "no author code/checkpoint was identified",
+        "actor prediction uses the shared observation-only mode bank"
+      ],
+      "reporting_name": "MARC candidate-lattice contingency",
+      "main_regimes": [
+        "near"
+      ],
+      "legacy_or_diagnostic_regimes": [],
+      "table_role": "main: near"
+    },
+    {
+      "canonical_name": "racp_lite",
+      "aliases": [
+        "racp",
+        "racp_lite",
+        "risk_aware_contingency"
+      ],
+      "regimes": [
+        "near"
+      ],
+      "paper_title": "RACP: Risk-Aware Contingency Planning with Multi-Modal Predictions",
+      "paper_year": 2025,
+      "paper_url": "https://arxiv.org/abs/2402.17387",
+      "official_code_url": "https://github.com/KhMustafa/Risk-aware-contingency-planning-with-multi-modal-predictions",
+      "implementation_kind": "finite-lattice belief/risk adaptation",
+      "fidelity": "mechanism-inspired adaptation",
+      "core_retained": [
+        "belief-weighted multimodal prediction",
+        "non-anticipative shared prefix",
+        "branch risk with expected/CVaR mixture",
+        "chance constraint",
+        "utility-risk optimization"
+      ],
+      "known_gaps": [
+        "continuous branch MPC is replaced by candidate enumeration",
+        "not API/checkpoint compatible with official code",
+        "belief update is prior-predictive until new online evidence arrives",
+        "the DOI was assigned in 2024 but the final IEEE T-IV volume citation is 2025 (10(1):228-243)"
+      ],
+      "reporting_name": "RACP candidate-lattice planner",
+      "main_regimes": [
+        "near"
+      ],
+      "legacy_or_diagnostic_regimes": [],
+      "table_role": "main: near"
+    },
+    {
+      "canonical_name": "robust_scenario_mpc",
+      "aliases": [
+        "robust_scenario_mpc",
+        "scenario_mpc",
+        "batkovic_scenario_mpc"
+      ],
+      "regimes": [
+        "near"
+      ],
+      "paper_title": "A Robust Scenario MPC Approach for Uncertain Multi-Modal Obstacles",
+      "paper_year": 2021,
+      "paper_url": "https://doi.org/10.1109/LCSYS.2020.3006819",
+      "official_code_url": null,
+      "implementation_kind": "finite-lattice scenario MPC adaptation",
+      "fidelity": "mechanism-inspired adaptation",
+      "core_retained": [
+        "multi-modal scenario costs",
+        "worst-scenario robust satisfaction",
+        "expected-cost term",
+        "smooth executable control preference"
+      ],
+      "known_gaps": [
+        "tube feedback policy and continuous MPC optimizer are replaced by explicit scoring of the shared executable candidate lattice"
+      ],
+      "reporting_name": "Robust scenario MPC adapter",
+      "main_regimes": [
+        "near"
+      ],
+      "legacy_or_diagnostic_regimes": [],
+      "table_role": "main: near"
+    },
+    {
+      "canonical_name": "dr_cvar_safety_filter",
+      "aliases": [
+        "dr_cvar_safety_filter",
+        "distributionally_robust_cvar_filter",
+        "safaoui_dr_cvar_filter"
+      ],
+      "regimes": [
+        "near"
+      ],
+      "paper_title": "Distributionally Robust CVaR-Based Safety Filtering for Motion Planning in Uncertain Environments",
+      "paper_year": 2024,
+      "paper_url": "https://arxiv.org/abs/2309.08821",
+      "official_code_url": "https://github.com/TSummersLab/dr-cvar-safety_filtering",
+      "implementation_kind": "finite-lattice DR-CVaR safety-filter adaptation",
+      "fidelity": "mechanism-inspired approximation",
+      "core_retained": [
+        "sample-based obstacle uncertainty",
+        "distributionally robust CVaR inflation",
+        "minimal correction of a reference plan",
+        "clearance admission"
+      ],
+      "known_gaps": [
+        "paper's DRO safe-halfspace construction and continuous MPC correction are replaced by a conservative Wasserstein-CVaR bound and nearest admitted candidate"
+      ],
+      "reporting_name": "DR-CVaR safety filter adapter",
+      "main_regimes": [
+        "near"
+      ],
+      "legacy_or_diagnostic_regimes": [],
+      "table_role": "main: near"
+    },
+    {
+      "canonical_name": "conformal_predictive_safety_filter",
+      "aliases": [
+        "conformal_predictive_safety_filter",
+        "conformal_safety_filter",
+        "cpsf"
+      ],
+      "regimes": [
+        "near"
+      ],
+      "paper_title": "Conformal Predictive Safety Filter for RL Controllers in Dynamic Environments",
+      "paper_year": 2023,
+      "paper_url": "https://arxiv.org/abs/2306.02551",
+      "official_code_url": null,
+      "implementation_kind": "split-conformal finite-lattice safety-filter adaptation",
+      "fidelity": "mechanism-inspired approximation",
+      "core_retained": [
+        "held-out calibration only",
+        "observation-only uncertainty/risk score",
+        "frozen conformal admission threshold",
+        "minimal-deviation safety projection"
+      ],
+      "known_gaps": [
+        "trajectory-wise conformal prediction intervals and learned RL safety filter are represented by binary risk admission over executable candidates"
+      ],
+      "reporting_name": "Conformal predictive safety filter adapter",
+      "main_regimes": [
+        "near"
+      ],
+      "legacy_or_diagnostic_regimes": [],
+      "table_role": "main: near"
+    },
+    {
+      "canonical_name": "expected_risk_filter",
+      "aliases": [
+        "expected_risk",
+        "expected_risk_filter",
+        "expected_risk_planner"
+      ],
+      "regimes": [
+        "near"
+      ],
+      "paper_title": "Expected-risk constrained planning (generic control baseline)",
+      "paper_year": null,
+      "paper_url": null,
+      "official_code_url": null,
+      "implementation_kind": "observation-only risk filter",
+      "fidelity": "exact protocol definition",
+      "core_retained": [
+        "multimodal collision loss expectation",
+        "risk-threshold admission",
+        "utility-risk selection"
+      ],
+      "known_gaps": [],
+      "reporting_name": "Expected-risk filter",
+      "main_regimes": [],
+      "legacy_or_diagnostic_regimes": [
+        "near"
+      ],
+      "table_role": "legacy/control/diagnostic"
+    },
+    {
+      "canonical_name": "cvar_risk_filter",
+      "aliases": [
+        "cvar_risk",
+        "cvar_risk_filter",
+        "cvar_planner"
+      ],
+      "regimes": [
+        "near"
+      ],
+      "paper_title": "CVaR-constrained planning (generic risk-sensitive baseline)",
+      "paper_year": null,
+      "paper_url": null,
+      "official_code_url": null,
+      "implementation_kind": "observation-only risk filter",
+      "fidelity": "exact protocol definition",
+      "core_retained": [
+        "weighted upper-tail CVaR",
+        "risk-threshold admission",
+        "utility-risk selection"
+      ],
+      "known_gaps": [],
+      "reporting_name": "CVaR risk filter",
+      "main_regimes": [],
+      "legacy_or_diagnostic_regimes": [
+        "near"
+      ],
+      "table_role": "legacy/control/diagnostic"
+    },
+    {
+      "canonical_name": "dro_cvar_filter",
+      "aliases": [
+        "dro_cvar",
+        "dro_cvar_filter",
+        "dro_cvar_safety_filter",
+        "dr_cvar_filter"
+      ],
+      "regimes": [
+        "near"
+      ],
+      "paper_title": "Distributionally robust CVaR planning (generic baseline)",
+      "paper_year": null,
+      "paper_url": null,
+      "official_code_url": null,
+      "implementation_kind": "observation-only robust-risk surrogate",
+      "fidelity": "explicit surrogate",
+      "core_retained": [
+        "CVaR tail risk",
+        "ambiguity-radius dispersion penalty",
+        "constrained selection"
+      ],
+      "known_gaps": [
+        "dispersion penalty is a fast Wasserstein-inspired surrogate rather than a full inner ambiguity optimization"
+      ],
+      "reporting_name": "DRO-CVaR filter",
+      "main_regimes": [],
+      "legacy_or_diagnostic_regimes": [
+        "near"
+      ],
+      "table_role": "legacy/control/diagnostic"
+    },
+    {
+      "canonical_name": "predictive_safety_filter",
+      "aliases": [
+        "predictive_safety_filter",
+        "psf",
+        "cbf_backup_filter",
+        "predictive_cbf_backup",
+        "backup_cbf_filter"
+      ],
+      "regimes": [
+        "near"
+      ],
+      "paper_title": "A Predictive Safety Filter for Learning-Based Control of Constrained Nonlinear Dynamical Systems",
+      "paper_year": 2021,
+      "paper_url": "https://arxiv.org/abs/1812.05506",
+      "official_code_url": null,
+      "implementation_kind": "finite-lattice predictive safety filter",
+      "fidelity": "mechanism-inspired adaptation",
+      "core_retained": [
+        "minimal intervention",
+        "input feasibility",
+        "stage backup-set margin",
+        "terminal backup-set margin",
+        "predictive barrier condition"
+      ],
+      "known_gaps": [
+        "candidate enumeration replaces online nonlinear MPC",
+        "geometric stopping set replaces a learned/verified terminal controller"
+      ],
+      "reporting_name": "Predictive safety filter",
+      "main_regimes": [
+        "near"
+      ],
+      "legacy_or_diagnostic_regimes": [],
+      "table_role": "main: near"
+    },
+    {
+      "canonical_name": "oracle_recovery_filter",
+      "aliases": [
+        "oracle_filter",
+        "oracle_recovery_filter",
+        "branchwise_oracle_filter",
+        "oracle_branchwise_recovery"
+      ],
+      "regimes": [
+        "near"
+      ],
+      "paper_title": "OC-RAP teacher-only oracle upper bound (not an external baseline)",
+      "paper_year": null,
+      "paper_url": null,
+      "official_code_url": null,
+      "implementation_kind": "non-deployable audit upper bound",
+      "fidelity": "exact teacher audit",
+      "core_retained": [
+        "branch-wise existential recovery option",
+        "oracle order: option maximization before latent-root aggregation"
+      ],
+      "known_gaps": [
+        "uses teacher tensors and must never be reported as deployable"
+      ],
+      "reporting_name": "Teacher oracle upper bound",
+      "main_regimes": [],
+      "legacy_or_diagnostic_regimes": [
+        "near"
+      ],
+      "table_role": "legacy/control/diagnostic"
+    },
+    {
+      "canonical_name": "postimpact_mpc_lite",
+      "aliases": [
+        "postimpact_mpc",
+        "postimpact_mpc_lite",
+        "post_impact_mpc_lite",
+        "postimpact_mpc_paper",
+        "integrated_postimpact_mpc"
+      ],
+      "regimes": [
+        "contact"
+      ],
+      "paper_title": "Integrated Post-Impact Planning and Active Safety Control for Autonomous Vehicles",
+      "paper_year": 2023,
+      "paper_url": "https://doi.org/10.1109/TIV.2023.3236150",
+      "official_code_url": null,
+      "implementation_kind": "finite-lattice post-impact objective",
+      "fidelity": "objective-level adaptation",
+      "core_retained": [
+        "post-impact yaw/adhesion stability",
+        "secondary-collision risk",
+        "terminal motion objective",
+        "control effort constraints"
+      ],
+      "known_gaps": [
+        "no impact impulse/damage-state estimator",
+        "continuous vehicle-dynamics MPC replaced by candidate costs"
+      ],
+      "reporting_name": "Post-impact MPC adapter",
+      "main_regimes": [
+        "contact"
+      ],
+      "legacy_or_diagnostic_regimes": [],
+      "table_role": "main: contact"
+    },
+    {
+      "canonical_name": "post_crash_braking",
+      "aliases": [
+        "post_crash_braking",
+        "post_crash_braking_rule",
+        "stable_stop",
+        "stable_stop_rule",
+        "postcrash_stable_stop"
+      ],
+      "regimes": [
+        "contact"
+      ],
+      "paper_title": "A System for Autonomous Braking of a Vehicle Following Collision",
+      "paper_year": 2017,
+      "paper_url": "https://doi.org/10.4271/2017-01-1581",
+      "official_code_url": null,
+      "implementation_kind": "finite-lattice autonomous post-impact braking adaptation",
+      "fidelity": "objective-level adaptation",
+      "core_retained": [
+        "collision-triggered autonomous braking",
+        "ABS-level stable-stop intent",
+        "terminal-speed stabilization",
+        "secondary-risk gate"
+      ],
+      "known_gaps": [
+        "hydraulic/ABS actuator dynamics are not present in WOMD; braking is projected onto executable brake/stabilize candidates"
+      ],
+      "reporting_name": "Autonomous post-impact braking",
+      "main_regimes": [
+        "contact"
+      ],
+      "legacy_or_diagnostic_regimes": [],
+      "table_role": "main: contact"
+    },
+    {
+      "canonical_name": "post_collision_restoration",
+      "aliases": [
+        "post_collision_restoration",
+        "trajectory_restoration",
+        "post_collision_trajectory_restoration",
+        "post_collision_restoration_heuristic",
+        "ackermann_restoration"
+      ],
+      "regimes": [
+        "contact"
+      ],
+      "paper_title": "Post-Collision Trajectory Restoration for a Single-track Ackermann Vehicle using Heuristic Steering and Tractive Force Functions",
+      "paper_year": 2026,
+      "paper_url": "https://arxiv.org/abs/2602.08444",
+      "official_code_url": null,
+      "implementation_kind": "finite-lattice restoration objective",
+      "fidelity": "objective-level adaptation",
+      "core_retained": [
+        "trajectory re-alignment",
+        "yaw stabilization",
+        "progress preservation",
+        "clearance/risk objective",
+        "Ackermann-feasibility proxies"
+      ],
+      "known_gaps": [
+        "paper is recent/preprint and no official implementation was identified",
+        "online state/impact estimator is not reproduced",
+        "continuous restoration optimization replaced by candidate selection"
+      ],
+      "reporting_name": "Post-collision restoration",
+      "main_regimes": [
+        "contact"
+      ],
+      "legacy_or_diagnostic_regimes": [],
+      "table_role": "main: contact"
+    },
+    {
+      "canonical_name": "postimpact_motion_tvlqr",
+      "aliases": [
+        "postimpact_motion_tvlqr",
+        "postimpact_motion_planning",
+        "wang2022_postimpact",
+        "postimpact_tvlqr"
+      ],
+      "regimes": [
+        "contact"
+      ],
+      "paper_title": "Post-Impact Motion Planning and Tracking Control for Autonomous Vehicles",
+      "paper_year": 2022,
+      "paper_url": "https://doi.org/10.1186/s10033-022-00745-w",
+      "official_code_url": null,
+      "implementation_kind": "finite-lattice post-impact planning/control adaptation",
+      "fidelity": "objective-level adaptation",
+      "core_retained": [
+        "post-impact trajectory re-alignment",
+        "obstacle-potential avoidance",
+        "TVLQR-like tracking/stability objective",
+        "control-effort allocation proxy"
+      ],
+      "known_gaps": [
+        "polynomial/APF continuous planner, TVLQR generalized-force dynamics, and wheel torque allocator are replaced by candidate-level objectives because WOMD lacks wheel-force state"
+      ],
+      "reporting_name": "Post-impact APF/TVLQR adapter",
+      "main_regimes": [
+        "contact"
+      ],
+      "legacy_or_diagnostic_regimes": [],
+      "table_role": "main: contact"
+    },
+    {
+      "canonical_name": "compensatory_postimpact_mpc",
+      "aliases": [
+        "compensatory_postimpact_mpc",
+        "cao_postimpact_mpc"
+      ],
+      "regimes": [
+        "contact"
+      ],
+      "paper_title": "Compensatory Model Predictive Control for Post-impact Trajectory Tracking via Active Front Steering and Differential Torque Vectoring",
+      "paper_year": 2021,
+      "paper_url": "https://doi.org/10.1177/0954407020979087",
+      "official_code_url": null,
+      "implementation_kind": "finite-lattice FCC-MPC adaptation",
+      "fidelity": "objective-level adaptation",
+      "core_retained": [
+        "lateral/yaw deviation attenuation",
+        "feedforward-feedback compensation objective",
+        "input/rate and adhesion proxies",
+        "secondary-collision risk term"
+      ],
+      "known_gaps": [
+        "wheel-level active-front-steering and differential-torque-vectoring allocation is unavailable in WOMD and is represented through candidate feasibility/control costs"
+      ],
+      "reporting_name": "Compensatory post-impact MPC adapter",
+      "main_regimes": [
+        "contact"
+      ],
+      "legacy_or_diagnostic_regimes": [],
+      "table_role": "main: contact"
+    },
+    {
+      "canonical_name": "robust_postimpact_control",
+      "aliases": [
+        "robust_postimpact_control",
+        "postimpact_sliding_mode",
+        "ao_postimpact_control"
+      ],
+      "regimes": [
+        "contact"
+      ],
+      "paper_title": "Advanced Post-impact Safety and Stability Control for Electric Vehicles",
+      "paper_year": 2022,
+      "paper_url": "https://doi.org/10.1049/itr2.12230",
+      "official_code_url": null,
+      "implementation_kind": "finite-lattice sliding-mode/QP adaptation",
+      "fidelity": "objective-level adaptation",
+      "core_retained": [
+        "course/lateral sliding surfaces",
+        "yaw/stability recovery",
+        "adhesion-aware robust allocation proxy",
+        "fault-tolerant control-rate preference"
+      ],
+      "known_gaps": [
+        "in-wheel-motor fault model and convex wheel-torque allocation cannot be reconstructed from WOMD and are represented by executable-candidate feasibility/adhesion costs"
+      ],
+      "reporting_name": "Robust post-impact stability-control adapter",
+      "main_regimes": [
+        "contact"
+      ],
+      "legacy_or_diagnostic_regimes": [],
+      "table_role": "main: contact"
+    },
+    {
+      "canonical_name": "severity_minimization",
+      "aliases": [
+        "severity_minimization",
+        "severity_minimization_planner",
+        "unavoidable_collision_planner",
+        "crash_mitigation_planner",
+        "uc_severity_planner"
+      ],
+      "regimes": [
+        "contact"
+      ],
+      "paper_title": "Motion planning for autonomous vehicles with the inclusion of post-impact motions for minimising collision risk",
+      "paper_year": 2023,
+      "paper_url": "https://doi.org/10.1080/00423114.2022.2088396",
+      "official_code_url": null,
+      "implementation_kind": "finite-lattice severity objective",
+      "fidelity": "paper-core adaptation",
+      "core_retained": [
+        "relative-speed severity proxy",
+        "collision probability",
+        "penetration/clearance penalty",
+        "post-impact stability and controllability"
+      ],
+      "known_gaps": [
+        "detailed occupant injury/damage models are not available in WOMD",
+        "continuous crash configuration optimization replaced by executable prefixes"
+      ],
+      "reporting_name": "Unavoidable-collision severity minimization",
+      "main_regimes": [],
+      "legacy_or_diagnostic_regimes": [
+        "contact"
+      ],
+      "table_role": "legacy/control/diagnostic"
+    }
+  ]
+}
