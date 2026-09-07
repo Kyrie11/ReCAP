@@ -109,7 +109,6 @@ class SourcePointsEncoder(nn.Module):
             mask = mask.bool()
         if not bool(mask.any()):
             return x.new_zeros(bs, self.encoder_channel)
-        x_features = x.new_zeros(bs, n, 256)
         vals = x[mask]
         # BatchNorm1d cannot estimate a variance from one sample while training.
         # Duplicating that one feature is mathematically neutral after pooling and
@@ -118,15 +117,21 @@ class SourcePointsEncoder(nn.Module):
             enc = self.first_mlp(torch.cat([vals, vals], dim=0))[:1]
         else:
             enc = self.first_mlp(vals)
+        # Under CUDA autocast, Linear/BatchNorm may return BF16/FP16 even when
+        # the input bridge tensor is FP32.  Allocate the scatter destination in
+        # the *computed feature dtype* so index_put_ never sees a mixed-dtype
+        # source/destination pair.  This preserves the source architecture and
+        # keeps AMP throughput; it is not a numerical/algorithmic change.
+        x_features = enc.new_zeros(bs, n, 256)
         x_features[mask] = enc
         pooled = x_features.max(dim=1).values
         cat = torch.cat([x_features, pooled[:, None].expand(-1, n, -1)], dim=-1)
-        res = x.new_zeros(bs, n, self.encoder_channel)
         vals2 = cat[mask]
         if self.training and vals2.shape[0] == 1:
             enc2 = self.second_mlp(torch.cat([vals2, vals2], dim=0))[:1]
         else:
             enc2 = self.second_mlp(vals2)
+        res = enc2.new_zeros(bs, n, self.encoder_channel)
         res[mask] = enc2
         return res.max(dim=1).values
 
@@ -242,13 +247,20 @@ class SourceAgentEncoder(nn.Module):
         feat = self._vector_feature(history.float(), valid.bool())
         flat = feat.reshape(B * A, feat.shape[-2], feat.shape[-1])
         actor_valid = valid.any(dim=-1).reshape(-1)
-        enc = history.new_zeros(B * A, self.dim)
+        ego_encoded = self.ego_state(current_state[:, :6].float())
         if bool(actor_valid.any()):
-            enc[actor_valid] = self.history(flat[actor_valid])
+            actor_encoded = self.history(flat[actor_valid])
+            enc = actor_encoded.new_zeros(B * A, self.dim)
+            enc[actor_valid] = actor_encoded
+        else:
+            # No source actor passed through an autocast operator, so use the
+            # current-state branch to choose the runtime dtype instead of the
+            # FP32 storage dtype of agent_history.
+            enc = ego_encoded.new_zeros(B * A, self.dim)
         enc = enc.view(B, A, self.dim)
         # Source PlanTF/PLUTO deliberately replace ego history with current-state
         # attention when use_ego_history=False (the public config default).
-        enc[:, 0] = self.ego_state(current_state[:, :6].float())
+        enc[:, 0] = ego_encoded.to(dtype=enc.dtype)
         last = _last_valid(history, valid.bool())
         typ = last[..., 7].long().clamp(0, 3)
         return enc + self.type_emb(typ)
@@ -275,9 +287,10 @@ class SourceMapEncoder(nn.Module):
         has_speed = torch.isfinite(speed) & (speed > 0)
         speed_emb = x.new_zeros(B, M, self.dim)
         if bool(has_speed.any()):
-            speed_emb[has_speed] = self.speed(speed[has_speed].unsqueeze(-1))
+            speed_val = self.speed(speed[has_speed].unsqueeze(-1))
+            speed_emb[has_speed] = speed_val.to(dtype=speed_emb.dtype)
         if bool((~has_speed).any()):
-            speed_emb[~has_speed] = self.unknown_speed.weight[0]
+            speed_emb[~has_speed] = self.unknown_speed.weight[0].to(dtype=speed_emb.dtype)
         return x + self.type_emb(kind) + self.route_emb(on_route) + self.tl_emb(tl) + speed_emb
 
 

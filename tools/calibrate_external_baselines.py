@@ -25,14 +25,23 @@ from collections import defaultdict
 import hashlib
 import json
 import math
+import os
+import re
 from pathlib import Path
 from typing import Any
+
+# CPSF calibration only reconstructs raw WOMD futures for conformal residuals;
+# it never needs an accelerator.  Default to the CPU backend *before* Waymax/JAX
+# is imported so a broken CUDA PJRT plugin cannot make this CPU-only step fail.
+# Explicit caller settings still win because setdefault is used.
+os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
+os.environ.setdefault("JAX_PLATFORMS", "cpu")
 
 import numpy as np
 
 from ocrap.config import load_config
 from ocrap.data.serialization import write_json
-from ocrap.data.womd.scenario_parser import iter_womd_scenarios
+from ocrap.data.waymax_loader import iter_waymax_womd_scenarios, iter_waymax_womd_scenarios_selected
 from ocrap.data.womd.sharded_path import resolve_womd_spec
 from ocrap.external_baselines.data import group_sample_paths, load_external_sample
 from ocrap.external_baselines.observed_risk import build_observed_risk_context
@@ -80,6 +89,16 @@ def _scalar(d: dict[str, Any], key: str, default: Any = None) -> Any:
         return default
 
 
+def _canonical_scene_id(value: Any) -> str:
+    text = str(value or "").strip()
+    return re.sub(r"__wx\d{8}$", "", text)
+
+
+def _source_index_from_scene_id(value: Any) -> int | None:
+    m = re.search(r"__wx(\d{8})$", str(value or "").strip())
+    return int(m.group(1)) if m else None
+
+
 def _target_groups(dataset: str, split: str) -> tuple[list[dict[str, Any]], dict[str, list[int]]]:
     groups = group_sample_paths(dataset, split=split)
     rows: list[dict[str, Any]] = []
@@ -89,11 +108,38 @@ def _target_groups(dataset: str, split: str) -> tuple[list[dict[str, Any]], dict
             continue
         sample = load_external_sample(paths[0])
         scene_id = str(_scalar(sample, "scene_id", ""))
+        official_id = str(_scalar(sample, "official_scenario_id", "") or "")
+        original_id = str(_scalar(sample, "original_scenario_id", "") or "")
         time_index = int(_scalar(sample, "time_index", 0))
-        if not scene_id:
+        source_index_value = _scalar(sample, "source_scenario_index", -1)
+        source_index = -1 if source_index_value is None else int(source_index_value)
+        # Older NPZ serialization accidentally mapped source index 0 to -1 via
+        # ``value or -1``.  The persisted __wx######## suffix is an exact
+        # provenance fallback, so recover it without consulting any future data.
+        if source_index < 0:
+            suffix_index = _source_index_from_scene_id(scene_id)
+            if suffix_index is not None:
+                source_index = suffix_index
+        match_ids = {
+            x for x in (
+                _canonical_scene_id(scene_id),
+                _canonical_scene_id(official_id),
+                _canonical_scene_id(original_id),
+            ) if x
+        }
+        if not match_ids:
             continue
-        rows.append({"group_index": gi, "scene_id": scene_id, "time_index": time_index, "sample": sample})
-        by_scene[scene_id].append(len(rows) - 1)
+        scene_key = _canonical_scene_id(official_id or original_id or scene_id)
+        rows.append({
+            "group_index": gi,
+            "scene_id": scene_id,
+            "scene_key": scene_key,
+            "match_ids": match_ids,
+            "source_scenario_index": source_index,
+            "time_index": time_index,
+            "sample": sample,
+        })
+        by_scene[scene_key].append(len(rows) - 1)
     return rows, dict(by_scene)
 
 
@@ -228,14 +274,38 @@ def main() -> None:
     alignments: list[float] = []
     matched_scene_ids: set[str] = set()
     target_ids = set(by_scene)
-    # Parse only until every target calibration scene is recovered.
-    for raw in iter_womd_scenarios(list(resolution.files), parser_cfg=cfg, verify_crc=True):
-        sid = str(raw.scenario_id)
-        if sid not in target_ids:
-            continue
-        matched_scene_ids.add(sid)
-        for row_i in by_scene[sid]:
+
+    # calibration_near_contact is built from WOMD TFExample shards.  Those
+    # records are tensorflow.Example messages, *not* Scenario protos.  Reuse the
+    # exact Waymax TFExample preprocessing path used by dataset construction so
+    # object truncation/order, SDC index and state layout are identical.  When
+    # source_scenario_index is available (the normal v48+ contract), materialize
+    # only requested scenarios; this is both more faithful and much faster than
+    # scanning every raw scene into a SimulatorState.
+    by_source: dict[int, list[int]] = defaultdict(list)
+    for row_i, row in enumerate(rows):
+        idx = int(row.get("source_scenario_index", -1))
+        if idx >= 0:
+            by_source[idx].append(row_i)
+
+    def consume(raw: Any, row_indices: list[int]) -> None:
+        raw_ids = {
+            x for x in (
+                _canonical_scene_id(getattr(raw, "scenario_id", "")),
+                _canonical_scene_id((getattr(raw, "metadata", {}) or {}).get("original_scenario_id")),
+                _canonical_scene_id((getattr(raw, "metadata", {}) or {}).get("official_scenario_id")),
+            ) if x
+        }
+        for row_i in row_indices:
             row = rows[row_i]
+            if raw_ids and row["match_ids"] and not (raw_ids & row["match_ids"]):
+                raise RuntimeError(
+                    "CPSF source-index provenance mismatch: "
+                    f"source_index={row.get('source_scenario_index')} sample_ids={sorted(row['match_ids'])} "
+                    f"raw_ids={sorted(raw_ids)}. Check that calibration_near_contact and --womd-pattern "
+                    "come from the same WOMD split/shard order."
+                )
+            sid = str(row["scene_key"])
             score, counts, alignment = _group_nonconformity(raw, row, cfg, H)
             if alignment > float(args.alignment_tolerance_m):
                 raise RuntimeError(
@@ -246,8 +316,35 @@ def main() -> None:
             scores_by_group[row_i] = score
             actors_by_group[row_i] = counts
             alignments.append(alignment)
-        if len(matched_scene_ids) == len(target_ids):
-            break
+            matched_scene_ids.add(sid)
+
+    if by_source and all(int(r.get("source_scenario_index", -1)) >= 0 for r in rows):
+        requested = sorted(by_source)
+        for raw in iter_waymax_womd_scenarios_selected(args.womd_pattern, requested, parser_cfg=cfg):
+            raw_idx = int((getattr(raw, "metadata", {}) or {}).get("_waymax_scenario_index", -1))
+            if raw_idx in by_source:
+                consume(raw, by_source[raw_idx])
+    else:
+        # Legacy fallback for datasets without source indices.  Still use the
+        # Waymax TFExample loader (never the Scenario-proto reader) and match by
+        # official/canonical scene identity.
+        id_to_rows: dict[str, list[int]] = defaultdict(list)
+        for row_i, row in enumerate(rows):
+            for sid in row["match_ids"]:
+                id_to_rows[sid].append(row_i)
+        for raw in iter_waymax_womd_scenarios(args.womd_pattern, max_scenarios=None, parser_cfg=cfg):
+            raw_ids = {
+                x for x in (
+                    _canonical_scene_id(getattr(raw, "scenario_id", "")),
+                    _canonical_scene_id((getattr(raw, "metadata", {}) or {}).get("original_scenario_id")),
+                    _canonical_scene_id((getattr(raw, "metadata", {}) or {}).get("official_scenario_id")),
+                ) if x
+            }
+            row_indices = sorted({i for sid in raw_ids for i in id_to_rows.get(sid, [])})
+            if row_indices:
+                consume(raw, row_indices)
+            if len(matched_scene_ids) == len(target_ids):
+                break
 
     missing_scenes = sorted(target_ids - matched_scene_ids)
     if missing_scenes:

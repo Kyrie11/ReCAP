@@ -457,7 +457,12 @@ class GameFormerFutureEncoder(nn.Module):
         size = torch.ones(B, N, M, T, 2, device=traj_xy.device, dtype=state_dtype)
         valid = torch.ones(B, N, M, T, 1, device=traj_xy.device, dtype=state_dtype)
         state = torch.cat([traj_xy, heading32.to(state_dtype), vel32.to(state_dtype), size, valid], dim=-1)
-        step = self.step_mlp(state.detach())
+        # This is the legacy/generic GameFormer adapter, not the source-faithful
+        # GameFormerFutureEncoderSource used by the main-table source port.  Its
+        # decoder trajectory is an internal learned prediction and must retain
+        # gradient flow.  The source-faithful class keeps the paper/source
+        # detach() semantics separately in source_ports.py.
+        step = self.step_mlp(state)
         pooled = step.max(dim=-2).values
         # Softmax is cheap and is a second numerically sensitive reduction.
         # Evaluate it in FP32 and cast the probabilities back for the weighted sum.

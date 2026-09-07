@@ -26,7 +26,32 @@ def _load_scenario_pb2():
 def parse_scenario_bytes(data: bytes):
     scenario_pb2 = _load_scenario_pb2()
     scenario = scenario_pb2.Scenario()
-    scenario.ParseFromString(data)
+    try:
+        scenario.ParseFromString(data)
+    except Exception as exc:
+        # WOMD ships two distinct TFRecord payload formats.  The legacy reader
+        # in this module consumes serialized Scenario protos, while Waymax and
+        # the official v1.3.1 ``tf_example`` shards contain tensorflow.Example
+        # records.  A protobuf DecodeError here is therefore usually a format
+        # mismatch, not corrupt data.  Detect TFExample best-effort and emit an
+        # actionable error instead of the opaque ParseFromString traceback.
+        looks_like_tfexample = False
+        try:
+            from tensorflow.core.example import example_pb2  # type: ignore
+
+            example = example_pb2.Example()
+            example.ParseFromString(data)
+            keys = set(example.features.feature.keys())
+            looks_like_tfexample = "scenario/id" in keys or "state/current/x" in keys
+        except Exception:
+            pass
+        if looks_like_tfexample:
+            raise ValueError(
+                "WOMD record is a tensorflow.Example (tf_example shard), not a "
+                "waymo_open_dataset.protos.Scenario. Use the Waymax TFExample "
+                "loader / simulation_backend=waymax_closed_loop for this path."
+            ) from exc
+        raise
     return scenario
 
 

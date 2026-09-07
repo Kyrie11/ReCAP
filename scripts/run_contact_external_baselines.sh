@@ -25,6 +25,7 @@ CL_WOMD="$(v50_normalize_womd_spec "$CL_WOMD" "$WOMD_NUM_SHARDS")"
 : "${CL_RENDER_TRACE:=false}"
 : "${CL_RENDER_MAX_AGENTS:=48}"
 : "${CL_PREFLIGHT:=true}"
+: "${JAX_RUNTIME_PREFLIGHT:=true}"
 : "${CL_MAX_STEPS:=40}"
 : "${CL_REPLAN_INTERVAL_STEPS:=1}"
 : "${CL_NUM_CANDIDATES:=24}"
@@ -90,12 +91,18 @@ run_env_gpu() {
 }
 run_env_cpu() {
   local cache="$JAX_CACHE_DIR/cpu"; mkdir -p "$cache"
-  env CUDA_VISIBLE_DEVICES="" \
+  env CUDA_VISIBLE_DEVICES="" JAX_PLATFORMS=cpu \
     OMP_NUM_THREADS="$THREADS_PER_JOB" MKL_NUM_THREADS="$THREADS_PER_JOB" \
     OPENBLAS_NUM_THREADS="$THREADS_PER_JOB" NUMEXPR_NUM_THREADS="$THREADS_PER_JOB" \
     TF_NUM_INTRAOP_THREADS="$THREADS_PER_JOB" TF_NUM_INTEROP_THREADS=2 MALLOC_ARENA_MAX=4 \
     JAX_COMPILATION_CACHE_DIR="$cache" PYTHONUNBUFFERED=1 "$@"
 }
+
+if v50_bool_true "$DO_CLOSED_LOOP" && v50_bool_true "$JAX_RUNTIME_PREFLIGHT"; then
+  echo "[PREFLIGHT] validating JAX/Waymax GPU runtime on CUDA device ${GPU_LIST[0]}"
+  run_env_gpu "${GPU_LIST[0]}" python tools/check_jax_waymax_runtime.py \
+    --require-gpu --output "$RUN/jax_waymax_runtime_preflight.json"
+fi
 
 if v50_bool_true "$DO_CLOSED_LOOP" && v50_bool_true "$CL_PREFLIGHT"; then
   preflight_target_args=()

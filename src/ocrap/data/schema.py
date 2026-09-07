@@ -146,7 +146,7 @@ class DatasetSample:
             "original_scenario_id": self.original_scenario_id,
             "official_scenario_id": str(h.metadata.get("official_scenario_id") or ""),
             "legacy_scenario_id": str(h.metadata.get("legacy_scenario_id") or ""),
-            "source_scenario_index": np.int64(h.metadata.get("source_scenario_index", -1) or -1),
+            "source_scenario_index": np.int64(-1 if h.metadata.get("source_scenario_index", -1) is None else h.metadata.get("source_scenario_index", -1)),
             "scenario_id_source": str(h.metadata.get("scenario_id_source", "unknown")),
             "womd_source_role": str(h.metadata.get("womd_source_role", "unknown")),
             "womd_source_pattern": str(h.metadata.get("womd_source_pattern", "")),
