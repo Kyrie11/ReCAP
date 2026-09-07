@@ -3,8 +3,9 @@ from __future__ import annotations
 import argparse,hashlib,json
 from pathlib import Path
 from typing import Any
+from ocrap.v48_108_raw_to_projected_action_pathway_audit import projection_structural_injectivity_event
 
-ENGINEERING_VERSION="v48.108.0-OC-RPAP"; V107_ENGINEERING_VERSION="v48.107.0-OC-FNAO"
+ENGINEERING_VERSION="v48.108.1-OC-RPAP"; V107_ENGINEERING_VERSION="v48.107.0-OC-FNAO"
 ROLES=("dev_near","dev_contact","certificate_near","certificate_contact")
 
 def _sha(p:Path)->str:return hashlib.sha256(p.read_bytes()).hexdigest()
@@ -24,7 +25,7 @@ def _action_gate(docs,space,metric):
 def _result_errors(o,v):
     e=[]
     checks=[(o.get("valid") is True,"valid"),(o.get("engineering_version")==ENGINEERING_VERSION,"version"),(o.get("variant")==v,"variant"),
-      (o.get("audit_only") is True,"audit"),(o.get("same_v48_102_target_specific_probe_recipe") is True,"probe_recipe"),(o.get("raw_pathway_fixed_by_encoder_layout") is True,"fixed_path"),(o.get("posthoc_token_selection") is False,"posthoc"),
+      (o.get("audit_only") is True,"audit"),(o.get("same_v48_102_target_specific_probe_recipe") is True,"probe_recipe"),(o.get("raw_pathway_fixed_by_encoder_layout") is True,"fixed_path"),(o.get("posthoc_token_selection") is False,"posthoc"),(o.get("projected_delta_block_map_absolute_error_diagnostic_only") is True,"fp32_abs_diagnostic_only"),
       (int(o.get("stage_i_parameters_trained",-1))==0,"stage_i"),(int(o.get("root_decoder_parameters_trained",-1))==0,"root"),(int(o.get("source_parameters_trained",-1))==0,"source"),(int(o.get("planner_parameters_trained",-1))==0,"planner"),
       (o.get("regime_conditioning") is False,"regime"),(o.get("boundary_transport") is False,"boundary"),(o.get("teacher_metadata_input_to_model") is False,"teacher"),(o.get("test_roots_read") is False,"test_roots")]
     for ok,n in checks:
@@ -52,7 +53,10 @@ def main()->int:
     p107=json.loads(a.v107_pipeline.read_text());c107=json.loads(a.v107_comparison.read_text());d107=c107.get("preregistered_decision") or {}
     if not(p107.get("valid") and p107.get("attribution_ready") and p107.get("engineering_version")==V107_ENGINEERING_VERSION and p107.get("preregistered_status")=="FIRST_BLOCK_NOMINAL_INVARIANT_ACTION_ORIENTATION_STOP"):errors.append("v107_pipeline")
     if not(c107.get("valid") and c107.get("attribution_ready") and d107.get("status")=="FIRST_BLOCK_NOMINAL_INVARIANT_ACTION_ORIENTATION_STOP" and d107.get("next_branch")=="close_first_block_orientation_then_preregister_raw_to_projected_action_pathway_audit_no_broad_encoder_or_source_sweep"):errors.append("v107_branch")
-    structural=bool(not errors and all(bool(o.get("projection_structural_injectivity")) for o in docs.values()))
+    event_structural={v:bool(all(projection_structural_injectivity_event(e) for e in o.get("events",{}).values())) for v,o in docs.items()}
+    for v,o in docs.items():
+        if bool(o.get("projection_structural_injectivity")) != event_structural[v]: errors.append(f"{v}:structural_flag_mismatch")
+    structural=bool(not errors and all(event_structural.values()))
     rs=_action_gate(docs,"raw","support") if not errors else {"go":False,"positive_cells":[],"top1_material_cells":[],"roles":[],"top1_roles":[]}
     rr=_action_gate(docs,"raw","reserve") if not errors else {"go":False,"positive_cells":[],"top1_material_cells":[],"roles":[],"top1_roles":[]}
     ps=_action_gate(docs,"projected","support") if not errors else {"go":False,"positive_cells":[],"top1_material_cells":[],"roles":[],"top1_roles":[]}
@@ -69,7 +73,7 @@ def main()->int:
         status="RAW_ACTION_PATHWAY_PARTIAL_RESERVE";next_branch="raw_reserve_sufficient_support_stop_then_preregister_raw_candidate_scene_support_interaction_audit_no_training_or_source_sweep"
     else:
         status="RAW_ACTION_PATHWAY_STOP";next_branch="raw_candidate_pathway_insufficient_then_preregister_raw_candidate_scene_relational_interaction_audit_no_training_or_source_sweep"
-    dec={"status":status,"next_branch":next_branch,"projection_structural_injectivity":structural,
+    dec={"status":status,"next_branch":next_branch,"projection_structural_injectivity":structural,"projected_delta_block_map_absolute_error_diagnostic_only":True,
       "raw_support_go":rs["go"],"raw_reserve_go":rr["go"],"projected_support_go":ps["go"],"projected_reserve_go":pr["go"],
       "raw_support_positive_cells":rs["positive_cells"],"raw_support_top1_material_cells":rs["top1_material_cells"],"raw_support_roles":rs["roles"],
       "raw_reserve_positive_cells":rr["positive_cells"],"raw_reserve_top1_material_cells":rr["top1_material_cells"],"raw_reserve_roles":rr["roles"],

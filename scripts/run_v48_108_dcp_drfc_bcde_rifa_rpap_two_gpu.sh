@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# V48.108 OC-RPAP: preregistered raw-to-projected candidate-action pathway audit after V48.107 STOP.
+# V48.108.1 OC-RPAP: engineering hotfix of the preregistered raw-to-projected candidate-action pathway audit after V48.107 STOP.
 # Audit only: no planner/source/Stage-I/root-decoder parameters are trained.
 set -Eeuo pipefail
 REPO="${OCRAP_REPO:-$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)}"; cd "$REPO"

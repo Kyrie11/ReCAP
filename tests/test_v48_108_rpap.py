@@ -3,7 +3,7 @@ import torch
 from ocrap.models.encoders import FlatFeatureLayout,StructuredTokenEncoder
 from ocrap.v48_108_raw_to_projected_action_pathway_audit import (
  action_features,candidate_pathway_dimension_check,contract_checks,projected_candidate_pathway,
- projection_full_column_rank,raw_candidate_pathway,raw_pathway_dim,reconstruct_raw_delta_from_projected,
+ projection_full_column_rank,projection_structural_injectivity_event,raw_candidate_pathway,raw_pathway_dim,reconstruct_raw_delta_from_projected,
  static_context_zero_delta_check,synthetic_projection_injectivity_check,
 )
 
@@ -36,3 +36,14 @@ def test_direct_projected_delta_matches_block_map():
 def test_static_context_and_runtime_contract_checks():
  assert static_context_zero_delta_check()
  assert all(contract_checks(192).values())
+
+
+def test_structural_injectivity_ignores_scale_dependent_fp32_absolute_diagnostic():
+    event={
+      "projection_all_full_column_rank":True,
+      "raw_delta_reconstruction_max_rel_l2":1.4e-15,
+      "projected_delta_block_map_max_abs":1.220703125e-4,
+    }
+    assert projection_structural_injectivity_event(event)
+    assert not projection_structural_injectivity_event({**event,"projection_all_full_column_rank":False})
+    assert not projection_structural_injectivity_event({**event,"raw_delta_reconstruction_max_rel_l2":2e-4})

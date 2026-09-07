@@ -12085,3 +12085,11 @@ The evidence chain is now:
 `+ within-domain ordinal improvement != population-invariant action orientation`.
 
 V48.108 tests the next structural proposition: **before adding more interaction capacity, determine whether the candidate-action pathway already carries the needed transferable response and whether the fixed projection is injective for the candidate-minus-nominal delta.**
+
+
+## V48.108.1 — OC-RPAP structural-injectivity engineering hotfix (scientific design unchanged)
+
+- **Why this patch exists.** V48.108.0 incorrectly allowed the absolute FP32 discrepancy between the algebraically equivalent expressions `P(x_candidate)-P(x_nominal)` and `W(x_candidate-x_nominal)` to own the `projection_structural_injectivity` branch. On the registered train population this scale-dependent absolute diagnostic reached `1.220703125e-4`, exceeding the hard-coded `2e-5` threshold even though every fixed projection was full-column-rank and the pseudoinverse reconstructed raw candidate deltas with relative L2 error around `1e-15`.
+- **Scientific correction.** Structural injectivity is now owned only by (1) full-column-rank of every frozen input projection and (2) the preregistered pseudoinverse reconstruction check. The FP32 block-map absolute discrepancy remains recorded, but is explicitly **diagnostic only** and cannot control GO/STOP branching.
+- **No algorithm change.** Raw pathway definition, projected token indices, target-specific probes, within-group permutation null, populations, thresholds, planner/Stage-I/root/source freeze, and all downstream branch rules are unchanged. This is an engineering/scientific-contract repair, not a new mechanism.
+- **Attribution rule.** Do not use the V48.108.0 `RAW_TO_PROJECTED_ACTION_PATHWAY_STRUCTURAL_STOP` for scientific branching. Rerun the same V48.108 command under v48.108.1 (cached feature extraction may be reused) and use only the regenerated comparison/pipeline artifacts.

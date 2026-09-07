@@ -13,7 +13,7 @@ from ocrap.models.inference import load_model_bundle
 from ocrap.models.encoders import StructuredTokenEncoder
 from ocrap.v48_96_support_reserve_root_observability import feature_only_dataset_cfg
 from ocrap.v48_108_raw_to_projected_action_pathway_audit import (
-    ALGORITHM_NAME, ENGINEERING_VERSION, action_features, projection_structure,
+    ALGORITHM_NAME, ENGINEERING_VERSION, action_features, projection_structure,projection_structural_injectivity_event,
     projected_candidate_pathway, raw_candidate_pathway, raw_pathway_dim,
     raw_static_context, reconstruct_raw_delta_from_projected,
 )
@@ -26,9 +26,9 @@ from tools.run_v48_97_executable_recovery_state import ROLES, sha256
 V107_ENGINEERING_VERSION = "v48.107.0-OC-FNAO"
 
 
-def _cache_key(checkpoint: Path, index_path: Path, role_filter: str | None, v93_path: Path | None) -> str:
+def _cache_key(checkpoint: Path, index_path: Path, role_filter: str | None, v93_path: Path | None, *, version: str = ENGINEERING_VERSION) -> str:
     payload = {
-        "version": ENGINEERING_VERSION, "checkpoint": sha256(checkpoint),
+        "version": version, "checkpoint": sha256(checkpoint),
         "index": sha256(index_path), "role": role_filter,
         "v93": sha256(v93_path) if v93_path and v93_path.is_file() else None,
     }
@@ -43,6 +43,12 @@ def extract_raw_projected_records(*, checkpoint: Path, index_path: Path, role_fi
                                   v93_path: Path | None, cache_dir: Path, device: str):
     key = _cache_key(checkpoint, index_path, role_filter, v93_path)
     cache_dir.mkdir(parents=True, exist_ok=True); cp = cache_dir / f"{key}.pt"
+    # V48.108.1 changes only the structural branch owner, not feature extraction.
+    # Reuse a byte-compatible V48.108.0 feature cache when available.
+    legacy_key = _cache_key(checkpoint, index_path, role_filter, v93_path, version="v48.108.0-OC-RPAP")
+    legacy_cp = cache_dir / f"{legacy_key}.pt"
+    if not cp.is_file() and legacy_cp.is_file():
+        cp = legacy_cp; key = legacy_key
     if cp.is_file():
         obj = torch.load(cp, map_location="cpu", weights_only=False)
         if obj.get("cache_key") == key:
@@ -178,11 +184,11 @@ def main()->int:
     if not tr or not dv or not ce: raise RuntimeError("V48.108 empty audit records")
     raw=_fit_family(tr,"raw",a.device,108); proj=_fit_family(tr,"projected",a.device,118)
     raw_cells=_eval_family(dv,ce,raw,"raw",a.device); proj_cells=_eval_family(dv,ce,proj,"projected",a.device)
-    structural=all(bool(e["projection_all_full_column_rank"]) and float(e["raw_delta_reconstruction_max_rel_l2"])<=1e-4 and float(e["projected_delta_block_map_max_abs"])<=2e-5 for e in events.values())
+    structural=all(projection_structural_injectivity_event(e) for e in events.values())
     result={
         "schema":"ocrap-v48.108-raw-to-projected-action-pathway-audit-v1","engineering_version":ENGINEERING_VERSION,"algorithm_name":ALGORITHM_NAME,
         "valid":True,"variant":a.variant,"audit_only":True,"checkpoint":str(a.checkpoint.resolve()),"checkpoint_sha256":sha256(a.checkpoint),
-        "raw_cells":raw_cells,"projected_cells":proj_cells,"events":events,"projection_structural_injectivity":structural,
+        "raw_cells":raw_cells,"projected_cells":proj_cells,"events":events,"projection_structural_injectivity":structural,"projected_delta_block_map_absolute_error_diagnostic_only":True,
         "train_counts":{"raw":raw["counts"],"projected":proj["counts"]},
         "planner_parameters_trained":0,"stage_i_parameters_trained":0,"root_decoder_parameters_trained":0,"source_parameters_trained":0,
         "relative_ranker_modified":False,"regime_conditioning":False,"boundary_transport":False,"teacher_metadata_input_to_model":False,"test_roots_read":False,
@@ -192,7 +198,7 @@ def main()->int:
     a.output.parent.mkdir(parents=True,exist_ok=True); a.output.write_text(json.dumps(result,indent=2,sort_keys=True)+"\n")
     torch.save({
         "schema":"ocrap-v48.108-raw-projected-probe-state-v1","engineering_version":ENGINEERING_VERSION,"algorithm_name":ALGORITHM_NAME,"variant":a.variant,
-        "raw_probes":_state_dict_pack(raw),"projected_probes":_state_dict_pack(proj),"projection_structural_injectivity":structural,
+        "raw_probes":_state_dict_pack(raw),"projected_probes":_state_dict_pack(proj),"projection_structural_injectivity":structural,"projected_delta_block_map_absolute_error_diagnostic_only":True,
         "checkpoint_sha256":sha256(a.checkpoint),
     },a.state_output)
     print(json.dumps({"valid":True,"variant":a.variant,"projection_structural_injectivity":structural,"elapsed_seconds":result["elapsed_seconds"]}))

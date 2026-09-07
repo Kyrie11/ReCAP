@@ -11,7 +11,7 @@ def main():
  if not(docs["runtime"].get("valid") and docs["runtime"].get("attribution_ready")):errors.append("runtime")
  for v in ("balanced","precision"):
   d=docs[v]
-  if not(d.get("valid") and d.get("engineering_version")=="v48.108.0-OC-RPAP" and d.get("variant")==v and d.get("audit_only")):errors.append(v)
+  if not(d.get("valid") and d.get("engineering_version")=="v48.108.1-OC-RPAP" and d.get("variant")==v and d.get("audit_only")):errors.append(v)
  if not(docs["comparison"].get("valid") and docs["comparison"].get("attribution_ready")):errors.append("comparison")
  if not(docs["v48_107_pipeline"].get("valid") and docs["v48_107_pipeline"].get("preregistered_status")=="FIRST_BLOCK_NOMINAL_INVARIANT_ACTION_ORIENTATION_STOP"):errors.append("v107_pipeline")
  d107=docs["v48_107_comparison"].get("preregistered_decision") or {}
@@ -20,7 +20,7 @@ def main():
  for k in ("balanced","precision","balanced_state","precision_state","comparison","runtime"):
   p=getattr(a,k);artifacts[k]={"path":str(p.resolve()),"sha256":sha(p)}
  status=(docs["comparison"].get("preregistered_decision") or {}).get("status")
- out={"schema":"ocrap-v48.108-rpap-pipeline-complete-v1","engineering_version":"v48.108.0-OC-RPAP","valid":not errors,"attribution_ready":not errors,"errors":errors,"experiment_type":"audit_only_raw_to_projected_candidate_action_pathway","artifacts":artifacts,"preregistered_status":status,
+ out={"schema":"ocrap-v48.108-rpap-pipeline-complete-v1","engineering_version":"v48.108.1-OC-RPAP","valid":not errors,"attribution_ready":not errors,"errors":errors,"experiment_type":"audit_only_raw_to_projected_candidate_action_pathway","artifacts":artifacts,"preregistered_status":status,
       "planner_parameters_trained":0,"stage_i_parameters_trained":0,"root_decoder_parameters_trained":0,"source_parameters_trained":0,"boundary_transport":False,"dataset_reconstruction":False,"regime_conditioning":False,"teacher_metadata_input_to_model":False,"test_roots_read":False,
       "v48_107_pipeline_sha256":sha(a.v48_107_pipeline),"v48_107_comparison_sha256":sha(a.v48_107_comparison)}
  a.output.parent.mkdir(parents=True,exist_ok=True);a.output.write_text(json.dumps(out,indent=2,sort_keys=True)+"\n");print(json.dumps({"valid":out["valid"],"status":status,"errors":errors}));return 0 if out["valid"] else 30

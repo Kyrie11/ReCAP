@@ -24,7 +24,7 @@ import torch
 
 from ocrap.models.encoders import FlatFeatureLayout, StructuredTokenEncoder
 
-ENGINEERING_VERSION = "v48.108.0-OC-RPAP"
+ENGINEERING_VERSION = "v48.108.1-OC-RPAP"
 ALGORITHM_NAME = "Observation-Consistent Raw-to-Projected Action Pathway Audit"
 RAW_PATH_GROUPS = ("ego", "prefix_param", "macro_scalar", "prefix_state", "control")
 PROJECTED_TOKEN_INDICES = (1, 2, 3, 4, 5)  # token 0 is CLS
@@ -138,6 +138,22 @@ def projection_structure(enc: StructuredTokenEncoder) -> dict[str, dict[str, flo
 
 def projection_full_column_rank(enc: StructuredTokenEncoder) -> bool:
     return bool(all(bool(v["full_column_rank"]) for v in projection_structure(enc).values()))
+
+
+def projection_structural_injectivity_event(event: dict, reconstruction_rel_tol: float = 1.0e-4) -> bool:
+    """Return the *structural* raw->projected injectivity decision for one event.
+
+    Structural injectivity is owned by full-column-rank of every fixed linear
+    projection together with the registered pseudoinverse reconstruction check.
+    The empirical FP32 quantity ``P(x1)-P(x0) - W(x1-x0)`` is intentionally not
+    part of this decision: the two algebraically equivalent expressions use
+    different floating-point evaluation orders and their absolute discrepancy is
+    scale dependent.  It remains a numerical diagnostic only.
+    """
+    return bool(
+        event.get("projection_all_full_column_rank") is True
+        and float(event.get("raw_delta_reconstruction_max_rel_l2", float("inf"))) <= float(reconstruction_rel_tol)
+    )
 
 
 def reconstruct_raw_delta_from_projected(enc: StructuredTokenEncoder, raw_delta: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
