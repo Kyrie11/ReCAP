@@ -1,0 +1,37 @@
+{
+  "v48_109": {
+    "engineering_version": "v48.109.0-OC-RCSO",
+    "reliability_gate": "PASS_WITH_NONBLOCKING_V108_PIPELINE_BYTE_SHA_NOTE",
+    "formal_decision": "FULL_STOP",
+    "status": "RAW_SCENE_RELATIONAL_STOP",
+    "mechanism_conclusion": "candidate-invariant pooled bilinear scene orientation is insufficient even under a unique closed-form convex optimum",
+    "family_closed": [
+      "u_T_w_plus_u_T_W_c candidate-invariant pooled-scene bilinear field",
+      "optimizer/LR/epoch explanations for that family",
+      "generic pooled-context capacity as the next primary fix"
+    ],
+    "theory_update": "the invariant object should be a population-shared candidate-conditioned active-constraint selection-and-orientation rule, not one fixed or merely scene-conditioned latent axis"
+  },
+  "v48_110": {
+    "engineering_version": "v48.110.0-OC-CATO",
+    "algorithm_name": "Observation-Consistent Candidate-to-Agent Active-Constraint Topology Orientation Audit",
+    "audit_only": true,
+    "trainable_model_parameters": 0,
+    "solver": "same V48.109 float64 closed-form class-balanced ridge, lambda=1/N, unique global optimum",
+    "active_selector": "minimum observation-only CV circle clearance over first 8 complete 9-D prefix states",
+    "feature_families": {
+      "base": "u",
+      "nearest": "[u, u outer a_nearest]",
+      "topology": "[u, u outer a_active1, u outer a_active2, u*c1, u*(c2-c1)]"
+    },
+    "topology_dim": 3588,
+    "formal_gate": "unchanged AUC>=0.65, true-shuffle>=0.05 in >=6/8; >=3/4 roles incl Near+Contact; top1 lift>=0.10 in >=4/8 incl Near+Contact",
+    "branches": {
+      "both_axes_go": "one nominal-invariant topology response-carrier integration",
+      "support_only": "signed debt active-constraint flow audit",
+      "reserve_only": "support-establishment active-constraint switch audit",
+      "both_stop_but_both_local_order": "same-feature convex pairwise ranking audit",
+      "otherwise_stop": "constraint-native candidate-agent geometry audit"
+    }
+  }
+}

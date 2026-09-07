@@ -1,0 +1,23 @@
+# V48.110 OC-CATO — target command
+
+cd /home/senzeyu2/code
+unzip -o /path/to/OC-RAP-v48.110-OC-CATO-minimal-overlay.zip
+cd /home/senzeyu2/code/OC-RAP
+
+export PYTHONPATH="$PWD/src:$PWD${PYTHONPATH:+:$PYTHONPATH}"
+export PYTHONNOUSERSITE=1
+
+python tools/check_v48_110_runtime_code_contract.py \
+  --repo "$PWD" \
+  --output /home/senzeyu2/code/OC-RAP/runs/OC-RAP-v48.110-runtime-code-contract.manual.json
+
+# Require: valid=true, attribution_ready=true, errors=[]
+
+GPU0=0 GPU1=1 \
+BASE_OUT=/home/senzeyu2/code/OC-RAP/runs \
+bash scripts/run_v48_110_dcp_drfc_bcde_rifa_cato_two_gpu.sh
+
+# Upload after completion:
+# runs/OC-RAP-v48.110-CATO-balanced.json
+# runs/OC-RAP-v48.110-CATO-precision.json
+# runs/OC-RAP-v48.110-OC-CATO-audits.zip
