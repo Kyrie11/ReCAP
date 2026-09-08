@@ -1,27 +1,33 @@
-# V48.111 submission-time full evaluation (no finetuning)
+# V48.111 evidence-frozen deployed three-regime evaluation
+#
+# Decision: DO NOT finetune before this run.
+# The V48.111 CNRO probe remains audit-only. The launcher fail-closes unless the
+# checkpoint is the V48.80 mechanism contract used by the audit chain and the
+# frozen Safe/Near/Contact calibration JSON is present.
+
 cd /home/senzeyu2/code/OC-RAP
 
 export PYTHONPATH="$PWD/src:$PWD${PYTHONPATH:+:$PYTHONPATH}"
 export PYTHONNOUSERSITE=1
 
-# Optional provenance preflight.
-python tools/check_v48_111_runtime_code_contract.py \
-  --repo "$PWD" \
-  --output /home/senzeyu2/code/OC-RAP/runs/OC-RAP-v48.111-runtime-code-contract.submission.manual.json
-
-# Full Safe + Near-Contact + Contact evaluation for balanced and precision.
 GPU0=0 GPU1=1 \
 CUDA_DEVICES=0,1 \
 BASE_OUT=/home/senzeyu2/code/OC-RAP/runs \
 VARIANTS=balanced,precision \
 MODEL_RUN=/home/senzeyu2/code/OC-RAP/runs/ocrap_v48_80_dcp_drfc_bcde_rifa_pistc_main \
+DEPLOYMENT_PROFILE=v48_80_evidence_frozen \
+RUN_CNRO_AUDIT=0 \
 MAX_SCENARIOS=0 \
 MAX_STEPS=40 \
 NUM_CANDIDATES=24 \
 NUM_RECOVERY_OPTIONS=12 \
 bash scripts/run_v48_111_submission_three_regime.sh
 
-# Output summaries:
+# Per-variant fail-closed deployment manifests are written to:
+# runs/ocrap_v48_111_submission_three_regime/V48.111-DEPLOYABLE-STACK-balanced.json
+# runs/ocrap_v48_111_submission_three_regime/V48.111-DEPLOYABLE-STACK-precision.json
+#
+# Final summaries:
 # runs/ocrap_v48_111_submission_three_regime/V48.111-SUBMISSION-THREE-REGIME-SUMMARY.json
 # runs/ocrap_v48_111_submission_three_regime/V48.111-SUBMISSION-THREE-REGIME-SUMMARY.csv
 # runs/ocrap_v48_111_submission_three_regime/V48.111-SUBMISSION-THREE-REGIME-SUMMARY.md
