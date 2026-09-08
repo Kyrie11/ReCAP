@@ -117,6 +117,19 @@ run_env_cpu() {
   local cache="$JAX_CACHE_DIR/cpu"; mkdir -p "$cache"
   env -u LD_LIBRARY_PATH CUDA_VISIBLE_DEVICES="" JAX_PLATFORMS=cpu OCRAP_TENSORFLOW_CPU_ONLY=1 JAX_COMPILATION_CACHE_DIR="$cache" "${common_env[@]}" "$@"
 }
+# JAX CUDA wheels currently still initialize the CUDA PJRT plugin during plugin
+# discovery even when JAX_PLATFORMS=cpu.  Hiding every GPU with
+# CUDA_VISIBLE_DEVICES="" can therefore emit/fail with CUDA_ERROR_NO_DEVICE
+# before the requested CPU backend is selected.  CPSF calibration needs JAX/
+# Waymax but must compute on CPU, so keep one allocated GPU *visible only for
+# CUDA plugin discovery* while JAX_PLATFORMS=cpu forces all JAX computation to
+# the CPU backend.  TensorFlow remains CPU-only via its own visibility API.
+: "${CPU_JAX_VISIBLE_DEVICE:=${GPU_LIST[0]}}"
+run_env_jax_cpu() {
+  local cache="$JAX_CACHE_DIR/jax_cpu"; mkdir -p "$cache"
+  env -u LD_LIBRARY_PATH CUDA_VISIBLE_DEVICES="$CPU_JAX_VISIBLE_DEVICE" JAX_PLATFORMS=cpu \
+    OCRAP_TENSORFLOW_CPU_ONLY=1 JAX_COMPILATION_CACHE_DIR="$cache" "${common_env[@]}" "$@"
+}
 
 if v50_bool_true "$DO_CLOSED_LOOP" && v50_bool_true "$JAX_RUNTIME_PREFLIGHT"; then
   echo "[PREFLIGHT] validating JAX/Waymax GPU runtime on CUDA device ${GPU_LIST[0]}"
@@ -187,7 +200,8 @@ else
   if v50_bool_true "$DO_CALIBRATE"; then
     if v50_bool_true "$FORCE_RECALIBRATE" || ! calibration_valid "$CONFORMAL_CALIBRATION"; then
       echo "[CALIBRATION] fitting CPSF horizon-wise conformal prediction intervals from $CALIB_NEAR against WOMD standard validation"
-      run_env_cpu python -u tools/calibrate_external_baselines.py \
+      echo "[CALIBRATION-RUNTIME] JAX compute backend=cpu; CUDA plugin discovery sees device $CPU_JAX_VISIBLE_DEVICE"
+      run_env_jax_cpu python -u tools/calibrate_external_baselines.py \
         --config "$CONFIG" --dataset "$CALIB_NEAR" --split calibration \
         --womd-pattern "$WOMD_VAL" --delta "$CONFORMAL_DELTA" \
         --prediction-horizon "$CONFORMAL_PREDICTION_HORIZON" \

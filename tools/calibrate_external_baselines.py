@@ -31,10 +31,14 @@ from pathlib import Path
 from typing import Any
 
 # CPSF calibration only reconstructs raw WOMD futures for conformal residuals;
-# it never needs an accelerator.  Default to the CPU backend *before* Waymax/JAX
-# is imported so a broken CUDA PJRT plugin cannot make this CPU-only step fail.
+# all JAX computation is forced onto CPU before Waymax/JAX is imported.
+#
+# Do NOT blank CUDA_VISIBLE_DEVICES here.  GPU-enabled JAX wheels may still
+# initialize their CUDA PJRT plugin during discovery even with JAX_PLATFORMS=cpu;
+# with CUDA_VISIBLE_DEVICES="" that discovery can emit CUDA_ERROR_NO_DEVICE.
+# The launcher therefore leaves one allocated GPU visible for plugin discovery
+# while JAX_PLATFORMS=cpu keeps actual calibration computation on CPU.
 # Explicit caller settings still win because setdefault is used.
-os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
 os.environ.setdefault("JAX_PLATFORMS", "cpu")
 
 import numpy as np
