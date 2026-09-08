@@ -103,6 +103,28 @@ def _source_index_from_scene_id(value: Any) -> int | None:
     return int(m.group(1)) if m else None
 
 
+def _raw_match_ids(raw: Any) -> set[str]:
+    """Return every stable identity alias exposed by the current WOMD loader.
+
+    Canonical OC-RAP datasets built before official ``scenario/id`` retention
+    use ``waymax_<hash>`` as their scene identity.  Current loaders preserve the
+    official WOMD id but also reproduce that legacy hash in metadata.  Treat
+    both as aliases for the *same* raw scene; ``__wx########`` is only a source
+    order hint and is deliberately stripped.
+    """
+    meta = getattr(raw, "metadata", {}) or {}
+    return {
+        x
+        for x in (
+            _canonical_scene_id(getattr(raw, "scenario_id", "")),
+            _canonical_scene_id(meta.get("original_scenario_id")),
+            _canonical_scene_id(meta.get("official_scenario_id")),
+            _canonical_scene_id(meta.get("legacy_scenario_id")),
+        )
+        if x
+    }
+
+
 def _target_groups(dataset: str, split: str) -> tuple[list[dict[str, Any]], dict[str, list[int]]]:
     groups = group_sample_paths(dataset, split=split)
     rows: list[dict[str, Any]] = []
@@ -249,6 +271,16 @@ def main() -> None:
     ap.add_argument("--mission-horizon", type=int, default=None)
     ap.add_argument("--calibration-unit", choices=("group", "scene_max"), default="group")
     ap.add_argument("--alignment-tolerance-m", type=float, default=0.25)
+    ap.add_argument(
+        "--source-index-policy",
+        choices=("hint", "strict"),
+        default="hint",
+        help=(
+            "Treat source_scenario_index as a verified acceleration hint (default) or "
+            "fail immediately on an index/identity mismatch. Stable scenario aliases "
+            "remain authoritative in both modes."
+        ),
+    )
     ap.add_argument("--allow-infinite", action="store_true")
     ap.add_argument("--output", required=True)
     args = ap.parse_args()
@@ -278,37 +310,62 @@ def main() -> None:
     alignments: list[float] = []
     matched_scene_ids: set[str] = set()
     target_ids = set(by_scene)
+    unresolved_rows: set[int] = set(range(len(rows)))
+    source_index_verified_groups = 0
+    identity_fallback_groups = 0
+    source_index_mismatches: list[dict[str, Any]] = []
+    source_index_mismatch_count = 0
 
     # calibration_near_contact is built from WOMD TFExample shards.  Those
     # records are tensorflow.Example messages, *not* Scenario protos.  Reuse the
     # exact Waymax TFExample preprocessing path used by dataset construction so
-    # object truncation/order, SDC index and state layout are identical.  When
-    # source_scenario_index is available (the normal v48+ contract), materialize
-    # only requested scenarios; this is both more faithful and much faster than
-    # scanning every raw scene into a SimulatorState.
+    # object truncation/order, SDC index and state layout are identical.
+    #
+    # ``source_scenario_index`` is intentionally only an acceleration hint.  It
+    # is not a stable scene identity across loader/version/path-order changes.
+    # A selected replay is accepted only after an official/legacy-id alias
+    # check.  Legacy pre-v48.28 datasets contain ``waymax_<hash>`` identities;
+    # current raw loaders expose the same value as ``legacy_scenario_id`` even
+    # when ``scenario_id`` is now the official WOMD id.  If an index hint truly
+    # points at a different scene, fall back to identity matching rather than
+    # either using the wrong future or aborting the whole calibration.
     by_source: dict[int, list[int]] = defaultdict(list)
     for row_i, row in enumerate(rows):
         idx = int(row.get("source_scenario_index", -1))
         if idx >= 0:
             by_source[idx].append(row_i)
 
-    def consume(raw: Any, row_indices: list[int]) -> None:
-        raw_ids = {
-            x for x in (
-                _canonical_scene_id(getattr(raw, "scenario_id", "")),
-                _canonical_scene_id((getattr(raw, "metadata", {}) or {}).get("original_scenario_id")),
-                _canonical_scene_id((getattr(raw, "metadata", {}) or {}).get("official_scenario_id")),
-            ) if x
-        }
+    def consume(
+        raw: Any,
+        row_indices: list[int],
+        *,
+        match_mode: str,
+        strict_source_index: bool = False,
+    ) -> int:
+        nonlocal source_index_verified_groups, identity_fallback_groups, source_index_mismatch_count
+        raw_ids = _raw_match_ids(raw)
+        consumed = 0
         for row_i in row_indices:
+            if row_i not in unresolved_rows:
+                continue
             row = rows[row_i]
             if raw_ids and row["match_ids"] and not (raw_ids & row["match_ids"]):
-                raise RuntimeError(
-                    "CPSF source-index provenance mismatch: "
-                    f"source_index={row.get('source_scenario_index')} sample_ids={sorted(row['match_ids'])} "
-                    f"raw_ids={sorted(raw_ids)}. Check that calibration_near_contact and --womd-pattern "
-                    "come from the same WOMD split/shard order."
-                )
+                mismatch = {
+                    "source_index": int(row.get("source_scenario_index", -1)),
+                    "sample_ids": sorted(row["match_ids"]),
+                    "raw_ids": sorted(raw_ids),
+                }
+                if strict_source_index:
+                    raise RuntimeError(
+                        "CPSF source-index provenance mismatch: "
+                        f"source_index={mismatch['source_index']} "
+                        f"sample_ids={mismatch['sample_ids']} raw_ids={mismatch['raw_ids']}. "
+                        "Stable scenario identity disagrees with the source-index hint."
+                    )
+                source_index_mismatch_count += 1
+                if len(source_index_mismatches) < 50:
+                    source_index_mismatches.append(mismatch)
+                continue
             sid = str(row["scene_key"])
             score, counts, alignment = _group_nonconformity(raw, row, cfg, H)
             if alignment > float(args.alignment_tolerance_m):
@@ -321,34 +378,63 @@ def main() -> None:
             actors_by_group[row_i] = counts
             alignments.append(alignment)
             matched_scene_ids.add(sid)
+            unresolved_rows.discard(row_i)
+            consumed += 1
+            if match_mode == "source_index_verified":
+                source_index_verified_groups += 1
+            elif match_mode == "identity_fallback":
+                identity_fallback_groups += 1
+        return consumed
 
+    # Fast path: replay historical indices, but verify every replay against all
+    # current raw identity aliases (official + legacy).  This is exact for the
+    # canonical dataset while remaining migration-safe after v48.28 id retention.
     if by_source and all(int(r.get("source_scenario_index", -1)) >= 0 for r in rows):
         requested = sorted(by_source)
         for raw in iter_waymax_womd_scenarios_selected(args.womd_pattern, requested, parser_cfg=cfg):
             raw_idx = int((getattr(raw, "metadata", {}) or {}).get("_waymax_scenario_index", -1))
             if raw_idx in by_source:
-                consume(raw, by_source[raw_idx])
-    else:
-        # Legacy fallback for datasets without source indices.  Still use the
-        # Waymax TFExample loader (never the Scenario-proto reader) and match by
-        # official/canonical scene identity.
+                consume(
+                    raw,
+                    by_source[raw_idx],
+                    match_mode="source_index_verified",
+                    strict_source_index=(args.source_index_policy == "strict"),
+                )
+
+    # Identity fallback is authoritative.  It serves two cases: legacy datasets
+    # whose record-order hint no longer agrees with the current loader, and
+    # datasets without a source index.  Match on official/legacy aliases and
+    # materialize only rows that are still unresolved.
+    if unresolved_rows:
         id_to_rows: dict[str, list[int]] = defaultdict(list)
-        for row_i, row in enumerate(rows):
-            for sid in row["match_ids"]:
+        for row_i in sorted(unresolved_rows):
+            for sid in rows[row_i]["match_ids"]:
                 id_to_rows[sid].append(row_i)
         for raw in iter_waymax_womd_scenarios(args.womd_pattern, max_scenarios=None, parser_cfg=cfg):
-            raw_ids = {
-                x for x in (
-                    _canonical_scene_id(getattr(raw, "scenario_id", "")),
-                    _canonical_scene_id((getattr(raw, "metadata", {}) or {}).get("original_scenario_id")),
-                    _canonical_scene_id((getattr(raw, "metadata", {}) or {}).get("official_scenario_id")),
-                ) if x
-            }
-            row_indices = sorted({i for sid in raw_ids for i in id_to_rows.get(sid, [])})
+            raw_ids = _raw_match_ids(raw)
+            row_indices = sorted(
+                {i for sid in raw_ids for i in id_to_rows.get(sid, []) if i in unresolved_rows}
+            )
             if row_indices:
-                consume(raw, row_indices)
-            if len(matched_scene_ids) == len(target_ids):
+                consume(raw, row_indices, match_mode="identity_fallback")
+            if not unresolved_rows:
                 break
+
+    if unresolved_rows:
+        unresolved_examples = [
+            {
+                "scene": rows[i]["scene_key"],
+                "time_index": int(rows[i]["time_index"]),
+                "source_scenario_index": int(rows[i].get("source_scenario_index", -1)),
+                "match_ids": sorted(rows[i]["match_ids"]),
+            }
+            for i in sorted(unresolved_rows)[:10]
+        ]
+        raise RuntimeError(
+            f"CPSF calibration matched {len(scores_by_group)}/{len(rows)} planning-decision groups; "
+            f"unresolved examples={unresolved_examples}. The raw WOMD source does not contain the "
+            "stable official/legacy identities required by calibration_near_contact."
+        )
 
     missing_scenes = sorted(target_ids - matched_scene_ids)
     if missing_scenes:
@@ -431,6 +517,12 @@ def main() -> None:
         "num_target_scenes": len(target_ids),
         "num_matched_groups": len(scores_by_group),
         "num_matched_scenes": len(matched_scene_ids),
+        "source_index_policy": args.source_index_policy,
+        "source_index_verified_groups": int(source_index_verified_groups),
+        "identity_fallback_groups": int(identity_fallback_groups),
+        "source_index_mismatch_count": int(source_index_mismatch_count),
+        "source_index_mismatch_examples": source_index_mismatches[:10],
+        "scene_identity_policy": "official_or_legacy_alias_authoritative; source_scenario_index_hint_only",
         "num_scores_by_horizon": num_scores,
         "quantile_index_p_by_horizon": quantile_indices,
         "conformal_prediction_intervals_m": intervals,

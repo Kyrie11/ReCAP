@@ -151,3 +151,103 @@ def test_launchers_force_cpu_backend_for_cpu_only_waymax_tools() -> None:
         text = (ROOT / rel).read_text()
         assert "tools/check_jax_waymax_runtime.py" in text
         assert "JAX_RUNTIME_PREFLIGHT" in text
+
+
+def test_cpsf_source_index_accepts_legacy_alias_for_current_official_id(monkeypatch, tmp_path: Path) -> None:
+    mod = _load_tool("calibrate_external_baselines_legacy_alias", "tools/calibrate_external_baselines.py")
+    row = {
+        "group_index": 0,
+        "scene_id": "waymax_deadbeef__wx00000007",
+        "scene_key": "waymax_deadbeef",
+        "match_ids": {"waymax_deadbeef"},
+        "source_scenario_index": 7,
+        "time_index": 10,
+        "sample": {"time_index": np.asarray(10)},
+    }
+    monkeypatch.setattr(mod, "load_config", lambda _: {"external_baselines": {"policy": {}}})
+    monkeypatch.setattr(mod, "_target_groups", lambda *_: ([row], {"waymax_deadbeef": [0]}))
+    monkeypatch.setattr(
+        mod, "resolve_womd_spec",
+        lambda _: SimpleNamespace(valid=True, files=("fake.tfrecord",), as_dict=lambda: {}),
+    )
+    raw = SimpleNamespace(
+        scenario_id="0123456789abcdef__wx00000007",
+        metadata={
+            "_waymax_scenario_index": 7,
+            "official_scenario_id": "0123456789abcdef",
+            "original_scenario_id": "0123456789abcdef",
+            "legacy_scenario_id": "waymax_deadbeef",
+        },
+    )
+    monkeypatch.setattr(mod, "iter_waymax_womd_scenarios_selected", lambda *a, **k: iter([raw]))
+    monkeypatch.setattr(mod, "iter_waymax_womd_scenarios", lambda *a, **k: (_ for _ in ()).throw(AssertionError("fallback should not run")))
+    monkeypatch.setattr(
+        mod, "_group_nonconformity",
+        lambda raw, row, cfg, horizon: (np.full(horizon, 0.25), np.ones(horizon, dtype=int), 0.0),
+    )
+    out = tmp_path / "calib.json"
+    monkeypatch.setattr(sys, "argv", [
+        "calibrate_external_baselines.py", "--config", "fake.yaml",
+        "--dataset", str(tmp_path / "calibration_near_contact"), "--split", "calibration",
+        "--womd-pattern", "fake@1", "--delta", "0.9",
+        "--prediction-horizon", "2", "--mission-horizon", "1",
+        "--allow-infinite", "--output", str(out),
+    ])
+    mod.main()
+    data = json.loads(out.read_text())
+    assert data["num_matched_groups"] == 1
+    assert data["source_index_verified_groups"] == 1
+    assert data["identity_fallback_groups"] == 0
+    assert data["source_index_mismatch_count"] == 0
+
+
+def test_cpsf_source_index_is_hint_and_falls_back_to_identity(monkeypatch, tmp_path: Path) -> None:
+    mod = _load_tool("calibrate_external_baselines_identity_fallback", "tools/calibrate_external_baselines.py")
+    row = {
+        "group_index": 0,
+        "scene_id": "waymax_target__wx00000007",
+        "scene_key": "waymax_target",
+        "match_ids": {"waymax_target"},
+        "source_scenario_index": 7,
+        "time_index": 10,
+        "sample": {"time_index": np.asarray(10)},
+    }
+    monkeypatch.setattr(mod, "load_config", lambda _: {"external_baselines": {"policy": {}}})
+    monkeypatch.setattr(mod, "_target_groups", lambda *_: ([row], {"waymax_target": [0]}))
+    monkeypatch.setattr(
+        mod, "resolve_womd_spec",
+        lambda _: SimpleNamespace(valid=True, files=("fake.tfrecord",), as_dict=lambda: {}),
+    )
+    wrong = SimpleNamespace(
+        scenario_id="official_wrong__wx00000007",
+        metadata={"_waymax_scenario_index": 7, "official_scenario_id": "official_wrong", "legacy_scenario_id": "waymax_wrong"},
+    )
+    target = SimpleNamespace(
+        scenario_id="official_target__wx00000011",
+        metadata={"_waymax_scenario_index": 11, "official_scenario_id": "official_target", "legacy_scenario_id": "waymax_target"},
+    )
+    monkeypatch.setattr(mod, "iter_waymax_womd_scenarios_selected", lambda *a, **k: iter([wrong]))
+    monkeypatch.setattr(mod, "iter_waymax_womd_scenarios", lambda *a, **k: iter([wrong, target]))
+    monkeypatch.setattr(
+        mod, "_group_nonconformity",
+        lambda raw, row, cfg, horizon: (np.full(horizon, 0.5), np.ones(horizon, dtype=int), 0.0),
+    )
+    out = tmp_path / "calib.json"
+    monkeypatch.setattr(sys, "argv", [
+        "calibrate_external_baselines.py", "--config", "fake.yaml",
+        "--dataset", str(tmp_path / "calibration_near_contact"), "--split", "calibration",
+        "--womd-pattern", "fake@1", "--delta", "0.9",
+        "--prediction-horizon", "2", "--mission-horizon", "1",
+        "--allow-infinite", "--output", str(out),
+    ])
+    mod.main()
+    data = json.loads(out.read_text())
+    assert data["num_matched_groups"] == 1
+    assert data["source_index_verified_groups"] == 0
+    assert data["identity_fallback_groups"] == 1
+    assert data["source_index_mismatch_count"] == 1
+
+
+def test_near_launcher_defaults_closed_loop_to_standard_validation() -> None:
+    text = (ROOT / "scripts/run_near_contact_external_baselines_2gpu_optimized.sh").read_text()
+    assert ': "${CL_WOMD:=$WOMD_VAL}"' in text

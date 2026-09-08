@@ -16,7 +16,11 @@ source scripts/lib/v50_runtime.sh
 : "${RUN:=runs/near_contact_external_baselines_optimized}"
 : "${WOMD_VAL:=/data0/senzeyu2/dataset/WOMD/waymo_open_dataset_motion_v_1_3_1/uncompressed/tf_example/validation/validation_tfexample.tfrecord@150}"
 : "${WOMD_VAL_INTERACTIVE:=/data0/senzeyu2/dataset/WOMD/waymo_open_dataset_motion_v_1_3_1/uncompressed/tf_example/validation_interactive/validation_interactive_tfexample.tfrecord@150}"
-: "${CL_WOMD:=$WOMD_VAL_INTERACTIVE}"
+# The canonical train/val/calibration/test Near buckets are built from standard
+# WOMD validation.  Closed-loop replay must use the same raw source so bucket
+# identities/time indices remain meaningful.  validation_interactive remains an
+# explicit user override via CL_WOMD, but is not the default for these buckets.
+: "${CL_WOMD:=$WOMD_VAL}"
 : "${WOMD_NUM_SHARDS:=150}"
 CL_WOMD="$(v50_normalize_womd_spec "$CL_WOMD" "$WOMD_NUM_SHARDS")"
 : "${CL_MAX_SCENARIOS:=50}"
