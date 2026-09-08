@@ -80,7 +80,7 @@ run_env_gpu() {
   local gpu="$1"; shift
   local cache="$JAX_CACHE_DIR/gpu_${gpu//[^[:alnum:]_.-]/_}"
   mkdir -p "$cache"
-  env CUDA_VISIBLE_DEVICES="$gpu" \
+  env -u LD_LIBRARY_PATH CUDA_VISIBLE_DEVICES="$gpu" OCRAP_TENSORFLOW_CPU_ONLY=1 \
     OMP_NUM_THREADS="$THREADS_PER_JOB" MKL_NUM_THREADS="$THREADS_PER_JOB" \
     OPENBLAS_NUM_THREADS="$THREADS_PER_JOB" NUMEXPR_NUM_THREADS="$THREADS_PER_JOB" \
     TF_NUM_INTRAOP_THREADS="$THREADS_PER_JOB" TF_NUM_INTEROP_THREADS=2 MALLOC_ARENA_MAX=4 \
@@ -91,7 +91,7 @@ run_env_gpu() {
 }
 run_env_cpu() {
   local cache="$JAX_CACHE_DIR/cpu"; mkdir -p "$cache"
-  env CUDA_VISIBLE_DEVICES="" JAX_PLATFORMS=cpu \
+  env -u LD_LIBRARY_PATH CUDA_VISIBLE_DEVICES="" JAX_PLATFORMS=cpu OCRAP_TENSORFLOW_CPU_ONLY=1 \
     OMP_NUM_THREADS="$THREADS_PER_JOB" MKL_NUM_THREADS="$THREADS_PER_JOB" \
     OPENBLAS_NUM_THREADS="$THREADS_PER_JOB" NUMEXPR_NUM_THREADS="$THREADS_PER_JOB" \
     TF_NUM_INTRAOP_THREADS="$THREADS_PER_JOB" TF_NUM_INTEROP_THREADS=2 MALLOC_ARENA_MAX=4 \
@@ -162,15 +162,38 @@ run_queue() {
   if [[ "$use_dynamic" == true ]]; then run_queue_dynamic "$runner" "$@"; else run_queue_fixed "$runner" "$@"; fi
 }
 
-eval_one() {
-  local method="$1" gpu="$2"
-  echo "[OFFLINE] contact method=$method gpu=$gpu"
-  run_env_gpu "$gpu" python -u -m ocrap.cli evaluate-baseline \
+eval_contact_bundle() {
+  local label="$1" methods_csv="$2"
+  local aggregate="$RUN/eval_contact__${label}_batched.json"
+  echo "[OFFLINE] contact bundle=$label methods=$methods_csv (CPU)"
+  run_env_cpu python -u -m ocrap.cli evaluate-baseline \
     --config "$CONFIG" --dataset "$TEST_CONTACT" --split test \
-    --output "$RUN/eval_contact_${method}.json" --baselines "$method" \
-    2>&1 | tee "$RUN/eval_contact_${method}.log"
+    --output "$aggregate" --baselines "$methods_csv" \
+    2>&1 | tee "$RUN/eval_contact__${label}_batched.log"
+  python tools/split_external_baseline_eval.py \
+    --input "$aggregate" --output-dir "$RUN" --prefix eval_contact_ --methods "$methods_csv"
 }
-if v50_bool_true "$DO_OFFLINE"; then run_queue eval_one "${METHODS[@]}"; fi
+
+if v50_bool_true "$DO_OFFLINE"; then
+  # Wang-2023 integrated MPC+PSO dominates Contact offline runtime.  Keep it in
+  # its own CPU process while batching the other source-faithful controllers in
+  # a second process.  This preserves every method's selector while cutting six
+  # full dataset/risk-profile passes to two and overlaps the dominant PSO work.
+  CONTACT_HEAVY_CSV="postimpact_mpc_lite"
+  CONTACT_FAST=()
+  for m in "${METHODS[@]}"; do [[ "$m" == postimpact_mpc_lite ]] || CONTACT_FAST+=("$m"); done
+  CONTACT_FAST_CSV="$(IFS=,; echo "${CONTACT_FAST[*]}")"
+  pids=(); names=()
+  eval_contact_bundle heavy "$CONTACT_HEAVY_CSV" & pids+=("$!"); names+=(heavy)
+  if [[ -n "$CONTACT_FAST_CSV" ]]; then
+    eval_contact_bundle fast "$CONTACT_FAST_CSV" & pids+=("$!"); names+=(fast)
+  fi
+  failed=0
+  for i in "${!pids[@]}"; do
+    wait "${pids[$i]}" || { echo "[ERROR] contact offline bundle ${names[$i]} failed" >&2; failed=1; }
+  done
+  ((failed == 0)) || exit 1
+fi
 
 run_closed_loop_method() {
   local method="$1" gpu="$2" target_args=()

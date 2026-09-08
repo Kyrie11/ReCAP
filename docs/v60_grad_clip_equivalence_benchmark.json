@@ -1,0 +1,10 @@
+{
+  "reference_norm": 1560.5638330902298,
+  "optimized_norm": 1560.562464773424,
+  "norm_abs_diff": 0.0013683168058378214,
+  "clipped_grad_max_abs_diff": 1.4901161193847656e-08,
+  "clipped_grad_max_rel_diff": 9.808993581827963e-07,
+  "cpu_ms_reference_norm_only": 23.680471375001844,
+  "cpu_ms_optimized_norm_only": 0.70547224999018,
+  "cpu_speedup": 33.56683608084013
+}

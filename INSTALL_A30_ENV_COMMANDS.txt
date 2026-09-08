@@ -1,0 +1,26 @@
+# Recommended: fresh Python 3.10 environment
+conda create -n ocrap-a30 python=3.10.16 pip -y
+conda activate ocrap-a30
+cd /path/to/OC-RAP-v60-a30-runtime-speed-optimized
+bash scripts/install_a30_py310_runtime.sh
+
+# Mandatory runtime preflight
+env -u LD_LIBRARY_PATH OCRAP_TENSORFLOW_CPU_ONLY=1 \
+  python tools/check_jax_waymax_runtime.py --require-gpu --check-waymax
+
+# Quick visibility check
+python - <<'PY'
+import jax, torch, tensorflow as tf
+print('JAX', jax.__version__, jax.devices())
+print('Torch', torch.__version__, torch.version.cuda, torch.cuda.is_available(),
+      [torch.cuda.get_device_name(i) for i in range(torch.cuda.device_count())])
+tf.config.set_visible_devices([], 'GPU')
+print('TensorFlow', tf.__version__, tf.config.get_visible_devices('GPU'))
+PY
+
+# Important:
+# - Do NOT install jax[cuda13] on driver 570.x.
+# - Do NOT set JAX_SKIP_CUDA_CONSTRAINTS_CHECK=1.
+# - Do NOT install tensorflow[and-cuda].
+# - Do NOT keep both tensorflow and tensorflow-cpu.
+# - Do NOT export an old CUDA/cuDNN through LD_LIBRARY_PATH for OC-RAP launchers.

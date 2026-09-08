@@ -201,7 +201,12 @@ class SourceStateAttentionEncoder(nn.Module):
         nn.init.normal_(self.query, std=0.02)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        tokens = torch.stack([linear(x[:, i, None]) for i, linear in enumerate(self.linears)], dim=1)
+        # Fuse the source's independent scalar Linear(1,D) state encoders into one
+        # broadcasted affine operation.  The ModuleList and parameter/state_dict
+        # layout are unchanged; this only removes six tiny CUDA launches.
+        weights = torch.stack([linear.weight[:, 0] for linear in self.linears], dim=0)
+        biases = torch.stack([linear.bias for linear in self.linears], dim=0)
+        tokens = x[:, : self.state_channel, None] * weights[None] + biases[None]
         tokens = tokens + self.pos_embed
         key_padding_mask = None
         if self.training and self.state_dropout > 0 and self.state_channel > 3:
@@ -248,15 +253,13 @@ class SourceAgentEncoder(nn.Module):
         flat = feat.reshape(B * A, feat.shape[-2], feat.shape[-1])
         actor_valid = valid.any(dim=-1).reshape(-1)
         ego_encoded = self.ego_state(current_state[:, :6].float())
-        if bool(actor_valid.any()):
-            actor_encoded = self.history(flat[actor_valid])
-            enc = actor_encoded.new_zeros(B * A, self.dim)
-            enc[actor_valid] = actor_encoded
-        else:
-            # No source actor passed through an autocast operator, so use the
-            # current-state branch to choose the runtime dtype instead of the
-            # FP32 storage dtype of agent_history.
-            enc = ego_encoded.new_zeros(B * A, self.dim)
+        # Dense execution is faster on GPU than synchronizing the host to discover
+        # which of at most 16 actor slots are populated.  Invalid actors contain a
+        # zero vector feature and are masked back to exact zero immediately after
+        # the source temporal FPN.  GroupNorm is per sample, so invalid slots do not
+        # alter valid-actor normalization statistics.
+        actor_encoded = self.history(flat)
+        enc = torch.where(actor_valid[:, None], actor_encoded, torch.zeros_like(actor_encoded))
         enc = enc.view(B, A, self.dim)
         # Source PlanTF/PLUTO deliberately replace ego history with current-state
         # attention when use_ego_history=False (the public config default).
@@ -285,12 +288,13 @@ class SourceMapEncoder(nn.Module):
         tl = meta[..., 2].long().clamp(0, 3)
         speed = meta[..., 3].float()
         has_speed = torch.isfinite(speed) & (speed > 0)
-        speed_emb = x.new_zeros(B, M, self.dim)
-        if bool(has_speed.any()):
-            speed_val = self.speed(speed[has_speed].unsqueeze(-1))
-            speed_emb[has_speed] = speed_val.to(dtype=speed_emb.dtype)
-        if bool((~has_speed).any()):
-            speed_emb[~has_speed] = self.unknown_speed.weight[0].to(dtype=speed_emb.dtype)
+        # Avoid two data-dependent GPU->CPU synchronizations.  Replace invalid
+        # speeds before the MLP, then choose the source unknown-speed embedding by
+        # tensor mask.  For valid speed entries the affine path is identical.
+        safe_speed = torch.where(has_speed, speed, torch.zeros_like(speed))
+        speed_val = self.speed(safe_speed.unsqueeze(-1)).to(dtype=x.dtype)
+        unknown = self.unknown_speed.weight[0].to(dtype=x.dtype).view(1, 1, -1)
+        speed_emb = torch.where(has_speed[..., None], speed_val, unknown)
         return x + self.type_emb(kind) + self.route_emb(on_route) + self.tl_emb(tl) + speed_emb
 
 
@@ -336,9 +340,9 @@ class SourceSceneEncoder(nn.Module):
         # MultiheadAttention fails for an all-masked row. Ego is always a legal
         # neutral token even in synthetic tests with no scene history.
         empty = key_padding.all(dim=1)
-        if bool(empty.any()):
-            key_padding = key_padding.clone()
-            key_padding[empty, 0] = False
+        # Vectorized all-masked-row repair: only slot 0 changes, and only for rows
+        # where every source token was masked.
+        key_padding = torch.cat([key_padding[:, :1] & ~empty[:, None], key_padding[:, 1:]], dim=1)
         return self.norm(self.encoder(x, src_key_padding_mask=key_padding)), key_padding
 
 
@@ -651,25 +655,31 @@ class GameFormerSourcePort(nn.Module):
         scene = torch.cat([actors, maps], dim=1)
         scene_mask = torch.cat([~valid.any(dim=-1), ~mv], dim=1)
         empty = scene_mask.all(dim=1)
-        if bool(empty.any()):
-            scene_mask = scene_mask.clone(); scene_mask[empty, 0] = False
+        scene_mask = torch.cat([scene_mask[:, :1] & ~empty[:, None], scene_mask[:, 1:]], dim=1)
         enc = self.fusion(scene, src_key_padding_mask=scene_mask)
         current = self._gf_current(hist, valid)
         modal = self.modal_emb(torch.arange(self.modalities, device=x.device))
-        contents: list[torch.Tensor] = []
-        trajs: list[torch.Tensor] = []
-        scores: list[torch.Tensor] = []
-        # Source InitialDecoder is actor-indexed; loop count is small (<=9) and
-        # avoids materializing B*A copies of the large scene memory.
-        for a in range(A):
-            q = enc[:, a:a+1] + modal[None] + self.agent_emb.weight[a][None, None]
-            q = self._cross_block(q, enc, scene_mask, self.init_cross, self.init_norm1, self.init_norm2, self.init_ffn)
-            tr, sc = self.predictors[0](q)
-            tr = tr.clone(); tr[..., :2] = tr[..., :2] + current[:, a, None, None, :2]
-            contents.append(q); trajs.append(tr); scores.append(sc)
-        content = torch.stack(contents, dim=1)
-        traj = torch.stack(trajs, dim=1)
-        score = torch.stack(scores, dim=1)
+        # Actor-indexed source decoder, vectorized over the actor axis.  With the
+        # source cap A<=9 the temporary B*A scene memory is small on a 24-GB A30,
+        # while replacing A separate MHA/FFN/predictor launches with one batched
+        # launch substantially improves GPU occupancy.
+        actor_ids = torch.arange(A, device=x.device)
+        q = (
+            enc[:, :A, None, :]
+            + modal[None, None, :, :]
+            + self.agent_emb(actor_ids)[None, :, None, :]
+        )
+        scene_len = enc.shape[1]
+        q_flat = q.reshape(B * A, self.modalities, self.dim)
+        enc_flat = enc[:, None].expand(-1, A, -1, -1).reshape(B * A, scene_len, self.dim)
+        scene_mask_flat = scene_mask[:, None].expand(-1, A, -1).reshape(B * A, scene_len)
+        content_flat = self._cross_block(q_flat, enc_flat, scene_mask_flat, self.init_cross, self.init_norm1, self.init_norm2, self.init_ffn)
+        tr_flat, sc_flat = self.predictors[0](content_flat)
+        tr_flat = tr_flat.clone()
+        tr_flat[..., :2] = tr_flat[..., :2] + current.reshape(B * A, 1, 1, -1)[..., :2]
+        content = content_flat.view(B, A, self.modalities, self.dim)
+        traj = tr_flat.view(B, A, self.modalities, self.future_len, 4)
+        score = sc_flat.view(B, A, self.modalities)
         ego_trajs = [traj[:, 0]]; ego_scores = [score[:, 0]]
         level_logits = [_project_modes_to_candidates(traj[:, 0, ..., :2], score[:, 0], prefix_traj, prefix_valid, mask, self.projection_beta)]
         actor_padding = ~valid.any(dim=-1)
@@ -677,17 +687,27 @@ class GameFormerSourcePort(nn.Module):
             multi = self.future_encoder(traj[..., :2], current)
             expected = (multi * score.float().softmax(dim=-1)[..., None]).mean(dim=2)
             interaction = self.interaction[k](expected, src_key_padding_mask=actor_padding)
-            next_content=[]; next_traj=[]; next_score=[]
             mem_base = torch.cat([interaction, enc], dim=1)
-            for a in range(A):
-                mem_mask = torch.cat([actor_padding, scene_mask], dim=1).clone()
-                mem_mask[:, a] = True  # source masks the current actor's own previous future
-                q = content[:, a] + multi[:, a]
-                q2 = self._cross_block(q, mem_base, mem_mask, self.level_cross[k], self.level_norm1[k], self.level_norm2[k], self.level_ffn[k])
-                tr, sc = self.predictors[k + 1](q2)
-                tr = tr.clone(); tr[..., :2] = tr[..., :2] + current[:, a, None, None, :2]
-                next_content.append(q2); next_traj.append(tr); next_score.append(sc)
-            content = torch.stack(next_content, dim=1); traj = torch.stack(next_traj, dim=1); score = torch.stack(next_score, dim=1)
+            mem_mask_base = torch.cat([actor_padding, scene_mask], dim=1)
+            mem_len = mem_base.shape[1]
+            # One mask per queried actor; preserve the source rule that actor a
+            # cannot attend to its own previous-future interaction token.
+            mem_mask = mem_mask_base[:, None].expand(-1, A, -1).clone()
+            diag = torch.arange(A, device=x.device)
+            mem_mask[:, diag, diag] = True
+            q_flat = (content + multi).reshape(B * A, self.modalities, self.dim)
+            mem_flat = mem_base[:, None].expand(-1, A, -1, -1).reshape(B * A, mem_len, self.dim)
+            mem_mask_flat = mem_mask.reshape(B * A, mem_len)
+            content_flat = self._cross_block(
+                q_flat, mem_flat, mem_mask_flat, self.level_cross[k],
+                self.level_norm1[k], self.level_norm2[k], self.level_ffn[k],
+            )
+            tr_flat, sc_flat = self.predictors[k + 1](content_flat)
+            tr_flat = tr_flat.clone()
+            tr_flat[..., :2] = tr_flat[..., :2] + current.reshape(B * A, 1, 1, -1)[..., :2]
+            content = content_flat.view(B, A, self.modalities, self.dim)
+            traj = tr_flat.view(B, A, self.modalities, self.future_len, 4)
+            score = sc_flat.view(B, A, self.modalities)
             ego_trajs.append(traj[:, 0]); ego_scores.append(score[:, 0])
             level_logits.append(_project_modes_to_candidates(traj[:, 0, ..., :2], score[:, 0], prefix_traj, prefix_valid, mask, self.projection_beta))
         return {

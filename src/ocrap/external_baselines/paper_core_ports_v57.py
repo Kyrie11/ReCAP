@@ -470,48 +470,67 @@ def _cached_box_qp_plan(
     return H, Q, tuple(plans)
 
 
+@lru_cache(maxsize=32)
+def _cached_box_qp_vector_plan(
+    h_key: tuple[float, ...], w_key: tuple[float, ...], xi: float, bound_key: tuple[float, ...]
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """Compile the same 81 active sets into batched affine maps.
+
+    For each active set ``s``, the free KKT solution is affine in
+    ``rhs = xi * H^T v``.  Precomputing ``u_s = A_s rhs + c_s`` lets NumPy
+    evaluate all 81 exact faces in a few dense vector kernels instead of an
+    81-iteration Python loop.  Status order is retained, so strict ``<`` tie
+    behavior matches the historical solver.
+    """
+    _H, _Q, plans = _cached_box_qp_plan(h_key, w_key, xi, bound_key)
+    maps = np.zeros((len(plans), 4, 4), dtype=float)
+    offsets = np.zeros((len(plans), 4), dtype=float)
+    free_mask = np.zeros((len(plans), 4), dtype=bool)
+    for si, (fixed, free, fixed_values, inv, bias) in enumerate(plans):
+        if fixed.size:
+            offsets[si, fixed] = fixed_values
+        if free.size:
+            maps[si][np.ix_(free, free)] = inv
+            offsets[si, free] = -(bias @ inv.T)
+            free_mask[si, free] = True
+    return maps, offsets, free_mask, np.asarray(bound_key, dtype=float)
+
+
 def _solve_box_qp_batch(v: np.ndarray, H: np.ndarray, wdiag: np.ndarray, xi: float, bound: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """Exact four-wheel box QP with cached active-set factorizations.
+    """Exact four-wheel box QP, vectorized over all 3^4 active sets.
 
     min_u u^T W u + xi ||v-Hu||^2,  -bound <= u <= bound.
-    The four actuator dimensions yield only 3^4=81 faces. Matrix inverses for
-    those faces depend only on source/controller parameters, so they are cached
-    across every candidate and every Waymax replan. No solver tolerance or
-    objective is changed by this acceleration.
+    This evaluates the identical 81 active sets and identical objective as v59;
+    only the Python control-flow is replaced by batched NumPy algebra.
     """
     v = np.asarray(v, dtype=float).reshape(-1, 2)
     H0 = np.asarray(H, dtype=float).reshape(2, 4)
     w0 = np.maximum(np.asarray(wdiag, dtype=float).reshape(4), 1.0e-12)
     bnd = np.maximum(np.asarray(bound, dtype=float).reshape(4), 1.0e-9)
-    # Rounded immutable keys prevent insignificant float-representation noise
-    # from defeating cache reuse while remaining far below controller precision.
     h_key = tuple(np.round(H0.reshape(-1), 14).tolist())
     w_key = tuple(np.round(w0, 18).tolist())
     b_key = tuple(np.round(bnd, 12).tolist())
-    Hc, _Q, plans = _cached_box_qp_plan(h_key, w_key, float(xi), b_key)
-    rhs_all = float(xi) * (v @ Hc)  # [B,4] = xi H^T v per row
-    best_u = np.zeros((v.shape[0], 4), dtype=float)
-    best_obj = np.full(v.shape[0], np.inf, dtype=float)
-    tol = 1.0e-8
+    Hc, _Q, _plans = _cached_box_qp_plan(h_key, w_key, float(xi), b_key)
+    maps, offsets, free_mask, cached_bound = _cached_box_qp_vector_plan(h_key, w_key, float(xi), b_key)
 
-    for fixed, free, fixed_values, inv, bias in plans:
-        u = np.zeros((v.shape[0], 4), dtype=float)
-        if fixed.size:
-            u[:, fixed] = fixed_values[None, :]
-        if free.size:
-            sol = (rhs_all[:, free] - bias[None, :]) @ inv.T
-            u[:, free] = sol
-            valid = np.all(np.abs(sol) <= bnd[free][None, :] + tol, axis=1)
-        else:
-            valid = np.ones(v.shape[0], dtype=bool)
-        if not valid.any():
-            continue
-        alloc = u @ Hc.T
-        obj = np.sum((u * u) * w0[None, :], axis=1) + float(xi) * np.sum((v - alloc) ** 2, axis=1)
-        improve = valid & (obj < best_obj)
-        best_obj[improve] = obj[improve]
-        best_u[improve] = u[improve]
-    return best_u, best_obj
+    rhs = float(xi) * (v @ Hc)  # [B,4]
+    # [B,S,4], where S=81 and status order is the historical product order.
+    all_u = np.einsum("bi,sji->bsj", rhs, maps, optimize=True) + offsets[None, :, :]
+    tol = 1.0e-8
+    within = np.abs(all_u) <= cached_bound[None, None, :] + tol
+    # Bounds matter only for KKT-free dimensions; active dimensions are fixed at
+    # the corresponding bound by construction.
+    valid = np.all(within | ~free_mask[None, :, :], axis=2)
+
+    alloc = np.einsum("bsj,kj->bsk", all_u, Hc, optimize=True)
+    obj = (
+        np.sum((all_u * all_u) * w0[None, None, :], axis=2)
+        + float(xi) * np.sum((v[:, None, :] - alloc) ** 2, axis=2)
+    )
+    obj = np.where(valid, obj, np.inf)
+    best_status = np.argmin(obj, axis=1)  # first minimum == v59 strict-< tie rule
+    rows = np.arange(v.shape[0])
+    return all_u[rows, best_status], obj[rows, best_status]
 
 
 def robust_postimpact_control_port(samples: Sequence[dict[str, Any]], cfg: dict[str, Any]) -> PortResult:

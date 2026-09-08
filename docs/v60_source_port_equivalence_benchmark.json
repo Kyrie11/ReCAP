@@ -1,0 +1,41 @@
+{
+  "plantf": {
+    "equivalence": {
+      "logits": {
+        "max_abs": 3.5762786865234375e-07,
+        "allclose": true
+      },
+      "plantf_trajectory": {
+        "max_abs": 5.364418029785156e-07,
+        "allclose": true
+      },
+      "plantf_probability": {
+        "max_abs": 2.0116567611694336e-07,
+        "allclose": true
+      }
+    },
+    "cpu_ms_ref": 7.5076583333763365,
+    "cpu_ms_opt": 6.544288666646025,
+    "speedup_cpu": 1.1472076975516488
+  },
+  "gameformer": {
+    "logits": {
+      "max_abs": 2.384185791015625e-07,
+      "allclose": true,
+      "finite": true
+    },
+    "gameformer_ego_level_trajs": {
+      "max_abs": 5.066394805908203e-07,
+      "allclose": true,
+      "finite": true
+    },
+    "gameformer_ego_level_scores": {
+      "max_abs": 1.4901161193847656e-07,
+      "allclose": true,
+      "finite": true
+    },
+    "cpu_ms_ref": 18.809183700000176,
+    "cpu_ms_opt": 7.460586500019417,
+    "speedup_cpu": 2.521140087304292
+  }
+}

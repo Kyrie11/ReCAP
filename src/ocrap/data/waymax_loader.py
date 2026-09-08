@@ -12,10 +12,46 @@ import numpy as np
 from ocrap.data.schema import RawScenario
 
 
+def _configure_tensorflow_for_waymax() -> None:
+    """Keep TensorFlow on CPU without hiding the GPU from JAX/PyTorch.
+
+    Waymax uses TensorFlow for TFRecord input preprocessing while its simulator is
+    JAX-based.  In a shared JAX+Torch CUDA environment the plain ``tensorflow``
+    wheel can discover the NVIDIA libraries installed by those frameworks.
+    Setting ``CUDA_VISIBLE_DEVICES=""`` would also hide the GPU from JAX, so we
+    instead use TensorFlow's own visibility API *before* Waymax imports its
+    dataloader.
+
+    Set OCRAP_TENSORFLOW_CPU_ONLY=0 only if GPU TensorFlow is intentionally
+    required by a different workflow.
+    """
+    flag = os.environ.get("OCRAP_TENSORFLOW_CPU_ONLY", "1").strip().lower()
+    if flag in {"0", "false", "no", "off"}:
+        return
+    try:
+        import tensorflow as tf  # type: ignore
+    except ImportError:
+        return
+    try:
+        tf.config.set_visible_devices([], "GPU")
+    except RuntimeError as exc:
+        # TensorFlow visibility cannot be changed after TF has initialized its
+        # runtime.  Fail closed rather than silently competing with JAX for GPU
+        # memory or binding a possibly incompatible CUDA stack.
+        visible = tf.config.get_visible_devices("GPU")
+        if visible:
+            raise RuntimeError(
+                "TensorFlow initialized a GPU before Waymax setup. Import OC-RAP/Waymax "
+                "before running TensorFlow GPU ops, or set OCRAP_TENSORFLOW_CPU_ONLY=0 "
+                "only if GPU TensorFlow is intentional."
+            ) from exc
+
+
 def _require_waymax():
     try:
         import jax  # type: ignore
         import jax.numpy as jnp  # type: ignore
+        _configure_tensorflow_for_waymax()
         from waymax import config as wx_config  # type: ignore
         from waymax import dataloader as wx_dataloader  # type: ignore
         from waymax.dataloader import womd_factories  # type: ignore

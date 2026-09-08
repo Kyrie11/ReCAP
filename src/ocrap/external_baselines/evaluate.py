@@ -100,7 +100,9 @@ def _predict_group(model: torch.nn.Module | None, samples: list[dict[str, Any]],
     need_history = arch in {"gameformer", "gameformer_lite", "gameformer_levelk", "plantf", "plan_tf", "plantf_adapter", "pluto", "pluto_adapter"}
     need_prefix_traj = need_history or arch in {"route_bc_wayformer", "wayformer_bc", "wayformer_scene_bc"}
     implementation = str(mcfg.get("implementation", bcfg.get("implementation", ""))).lower()
-    need_source_scene = (arch in {"route_bc_wayformer", "wayformer_bc", "wayformer_scene_bc"}) or (implementation in {"source_port", "source_port_v54", "sourceported_v54"} and arch in {"gameformer", "gameformer_lite", "gameformer_levelk", "plantf", "plan_tf", "plantf_adapter", "pluto", "pluto_adapter"})
+    source_port_arch = implementation in {"source_port", "source_port_v54", "sourceported_v54"} and arch in {"gameformer", "gameformer_lite", "gameformer_levelk", "plantf", "plan_tf", "plantf_adapter", "pluto", "pluto_adapter"}
+    need_source_scene = (arch in {"route_bc_wayformer", "wayformer_bc", "wayformer_scene_bc"}) or source_port_arch
+    materialize_legacy_history = need_history and not source_port_arch
     # Source ports consume candidate-independent actor/map tensors, not the old
     # handcrafted candidate-specific PlanTF/PLUTO topology proxy.
     need_topology = arch in {"betop", "betop_lite", "betopnet", "betopnet_lite"} or (not need_source_scene and arch in {"plantf", "plan_tf", "plantf_adapter", "pluto", "pluto_adapter"})
@@ -138,7 +140,7 @@ def _predict_group(model: torch.nn.Module | None, samples: list[dict[str, Any]],
             "option_valid": torch.from_numpy(option_valid).to(device, non_blocking=True),
         })
 
-    if need_history:
+    if materialize_legacy_history:
         ego0, neigh0, nv0, origin0, _yaw0, rot0 = _history_scene_arrays(samples[0], cfg)
         pref0, _ = _prefix_traj_array(samples[0], cfg, origin0, rot0)
         H, A_hist, T = int(ego0.shape[0]), int(neigh0.shape[0]), int(pref0.shape[0])
@@ -262,7 +264,10 @@ def _contact_extra_metrics(records: list[dict[str, Any]]) -> dict[str, float | N
     return out
 
 
-def _record_for_selection(method: str, samples: list[dict[str, Any]], sel: ExternalSelection, cfg: dict[str, Any], *, observed_profiles: list[Any] | None = None) -> dict[str, Any]:
+def _record_for_selection(
+    method: str, samples: list[dict[str, Any]], sel: ExternalSelection, cfg: dict[str, Any], *,
+    observed_profiles: list[Any] | None = None, observed_profile: Any | None = None,
+) -> dict[str, Any]:
     idx = int(np.clip(sel.selected_index, 0, max(len(samples) - 1, 0)))
     chosen = samples[idx]
     utility = np.asarray([_scalar(d, "utility", 0.0) for d in samples], dtype=float)
@@ -274,7 +279,9 @@ def _record_for_selection(method: str, samples: list[dict[str, Any]], sel: Exter
         selected_option = best_shared_option_index(chosen.get("m_star", np.zeros((0, 0))), chosen.get("root_probs", np.zeros((0,))), gamma=0.0, root_valid=chosen.get("root_valid", None), option_valid=chosen.get("option_valid", None))
     drs = deployable_recovery_success(chosen.get("m_star", np.zeros((0, 0))), chosen.get("root_probs", np.zeros((0,))), int(selected_option), chosen.get("root_valid", None))
     nup = nominal_utility_preservation(utility[0] if utility.size else 0.0, utility[idx] if utility.size else 0.0, sigma_u=float((cfg.get("metrics", {}) or {}).get("sigma_u", 1.0)))
-    observed = observed_profiles[idx] if observed_profiles is not None and len(observed_profiles) > idx else observed_risk_profile(chosen, cfg)
+    observed = observed_profile
+    if observed is None:
+        observed = observed_profiles[idx] if observed_profiles is not None and len(observed_profiles) > idx else observed_risk_profile(chosen, cfg)
     return {
         "method": method,
         "fra_cand": false_recoverability_admission(sel.admitted, r_dep),
@@ -413,6 +420,14 @@ def evaluate_external_baselines(
         predictor_free_paper_names = {
             "postimpact_mpc", "postimpact_mpc_lite", "post_impact_mpc_lite", "postimpact_mpc_paper", "integrated_postimpact_mpc",
             "postimpact_motion_tvlqr", "postimpact_motion_planning", "wang2022_postimpact", "postimpact_tvlqr",
+            # v57/v58 source ports are also predictor-free in select_external_policy.
+            # Keeping this set in sync prevents the evaluator from forecasting all
+            # actor-risk profiles before a controller that never consumes them.
+            "post_crash_braking", "post_crash_braking_rule", "stable_stop", "stable_stop_rule", "postcrash_stable_stop",
+            "post_collision_restoration", "trajectory_restoration", "post_collision_trajectory_restoration", "post_collision_restoration_heuristic", "ackermann_restoration",
+            "compensatory_postimpact_mpc", "cao_postimpact_mpc",
+            "robust_postimpact_control", "postimpact_sliding_mode", "ao_postimpact_control",
+            "severity_minimization", "severity_minimization_planner", "unavoidable_collision_planner", "crash_mitigation_planner", "uc_severity_planner",
         }
         simple_names = oracle_names | pure_learned | predictor_free_paper_names
         need_profiles = any(m.lower() not in simple_names | context_only_names for m in methods)
@@ -425,6 +440,8 @@ def evaluate_external_baselines(
         else:
             profiles, risk_context = None, None
         timing["observed_risk_s"] += perf_counter() - tick
+        selections: dict[str, ExternalSelection] = {}
+        selection_times: dict[str, float] = {}
         for method in methods:
             ml = method.lower()
             use_profiles = profiles if ml not in simple_names | context_only_names else None
@@ -436,8 +453,31 @@ def evaluate_external_baselines(
             )
             selection_s = perf_counter() - tick
             timing["selection_s_by_method"][method] += selection_s
-            record = _record_for_selection(method, samples, sel, model_cfg, observed_profiles=profiles)
-            record["selection_time_ms"] = 1000.0 * selection_s
+            selections[method] = sel
+            selection_times[method] = selection_s
+
+        # Even predictor-free controllers report the selected candidate's observed
+        # risk metrics.  v59 called observed_risk_profile separately per method,
+        # rebuilding the same actor forecast repeatedly.  Score the *unique selected
+        # candidates* in one batch instead.  If all-candidate profiles were already
+        # needed for selection, simply reuse them.
+        selected_profile_by_index: dict[int, Any] = {}
+        if profiles is None:
+            unique_idx = sorted({int(np.clip(sel.selected_index, 0, max(len(samples) - 1, 0))) for sel in selections.values()})
+            if unique_idx:
+                tick = perf_counter()
+                selected_profiles = observed_risk_profiles([samples[i] for i in unique_idx], model_cfg)
+                timing["observed_risk_s"] += perf_counter() - tick
+                selected_profile_by_index = dict(zip(unique_idx, selected_profiles))
+
+        for method in methods:
+            sel = selections[method]
+            idx = int(np.clip(sel.selected_index, 0, max(len(samples) - 1, 0)))
+            chosen_profile = profiles[idx] if profiles is not None and len(profiles) > idx else selected_profile_by_index.get(idx)
+            record = _record_for_selection(
+                method, samples, sel, model_cfg, observed_profiles=profiles, observed_profile=chosen_profile
+            )
+            record["selection_time_ms"] = 1000.0 * selection_times[method]
             records_by_method[method].append(record)
         if gi == 1 or gi % 500 == 0:
             print({"event": "external_eval_progress", "groups_done": gi, "num_groups": len(groups)}, flush=True)

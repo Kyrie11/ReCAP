@@ -111,11 +111,11 @@ run_env_gpu() {
   local gpu="$1"; shift
   local cache="$JAX_CACHE_DIR/gpu_${gpu//[^[:alnum:]_.-]/_}"
   mkdir -p "$cache"
-  env CUDA_VISIBLE_DEVICES="$gpu" JAX_COMPILATION_CACHE_DIR="$cache" "${common_env[@]}" "$@"
+  env -u LD_LIBRARY_PATH CUDA_VISIBLE_DEVICES="$gpu" OCRAP_TENSORFLOW_CPU_ONLY=1 JAX_COMPILATION_CACHE_DIR="$cache" "${common_env[@]}" "$@"
 }
 run_env_cpu() {
   local cache="$JAX_CACHE_DIR/cpu"; mkdir -p "$cache"
-  env CUDA_VISIBLE_DEVICES="" JAX_PLATFORMS=cpu JAX_COMPILATION_CACHE_DIR="$cache" "${common_env[@]}" "$@"
+  env -u LD_LIBRARY_PATH CUDA_VISIBLE_DEVICES="" JAX_PLATFORMS=cpu OCRAP_TENSORFLOW_CPU_ONLY=1 JAX_COMPILATION_CACHE_DIR="$cache" "${common_env[@]}" "$@"
 }
 
 if v50_bool_true "$DO_CLOSED_LOOP" && v50_bool_true "$JAX_RUNTIME_PREFLIGHT"; then
@@ -212,14 +212,21 @@ PY
 fi
 export CONFORMAL_INTERVALS CONFORMAL_DELTA CONFORMAL_PREDICTION_HORIZON CONFORMAL_MISSION_HORIZON CONFORMAL_CALIBRATION_UNIT WOMD_VAL
 
-eval_one() {
-  local method="$1" gpu="$2"
-  echo "[OFFLINE] near method=$method gpu=$gpu conformal_intervals=$CONFORMAL_INTERVALS"
-  run_env_gpu "$gpu" python -u -m ocrap.cli evaluate-baseline \
+eval_near_batched() {
+  # All Near methods are non-learning observation-only filters/controllers.  A
+  # multi-method evaluation is mathematically identical to six separate runs,
+  # but loads each candidate group and builds the shared observed-risk context
+  # only once.  Run it on CPU: these selectors are NumPy/closed-form code and do
+  # not benefit from occupying an A30.
+  local aggregate="$RUN/eval_near_contact__batched.json"
+  echo "[OFFLINE] near batched methods=$METHODS_CSV conformal_intervals=$CONFORMAL_INTERVALS"
+  run_env_cpu python -u -m ocrap.cli evaluate-baseline \
     --config "$CONFIG" --dataset "$TEST_NEAR" --split test \
-    --output "$RUN/eval_near_contact_${method}.json" --baselines "$method" \
+    --output "$aggregate" --baselines "$METHODS_CSV" \
     --set "external_baselines.policy.conformal_prediction_intervals_m=$CONFORMAL_INTERVALS" \
-    2>&1 | tee "$RUN/eval_near_contact_${method}.log"
+    2>&1 | tee "$RUN/eval_near_contact__batched.log"
+  python tools/split_external_baseline_eval.py \
+    --input "$aggregate" --output-dir "$RUN" --prefix eval_near_contact_ --methods "$METHODS_CSV"
 }
 
 supports_wait_pid_capture() {
@@ -260,7 +267,7 @@ run_queue() {
 }
 
 if v50_bool_true "$DO_OFFLINE"; then
-  run_queue eval_one "${METHODS[@]}"
+  eval_near_batched
 fi
 
 run_closed_loop_method() {

@@ -1,0 +1,9 @@
+{
+  "random_cases": 200,
+  "allclose": true,
+  "max_abs_u": 3.27545990330691e-10,
+  "max_abs_obj": 3.725290298461914e-09,
+  "batch9_ms_legacy": 2.570997970999997,
+  "batch9_ms_optimized": 0.23273511499996857,
+  "speedup": 11.046884656835495
+}

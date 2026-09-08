@@ -1,0 +1,29 @@
+OC-RAP v60 validation in the sandbox (CPU-only environment)
+
+1. bash -n passed:
+   scripts/run_all_regime_external_baselines_optimized.sh
+   scripts/run_safe_regime_external_baselines.sh
+   scripts/run_near_contact_external_baselines_2gpu_optimized.sh
+   scripts/run_contact_external_baselines.sh
+   scripts/create_a30_py310_env.sh
+   scripts/install_a30_py310_runtime.sh
+
+2. py_compile passed for all v60 modified Python runtime/evaluator/source-port files.
+
+3. External-baseline targeted tests:
+   72 passed in 3.98s
+
+4. Historical tools-import tests, invoked correctly as python -m pytest:
+   36 passed in 4.38s
+
+5. Full suite:
+   stopped at a pre-existing missing historical artifact
+   run_v47_two_gpu_fast_commands.txt after 186 tests passed.
+   This file is absent from the uploaded v59 source archive as well and is not a v60 regression.
+
+6. Numerical/microbenchmark artifacts:
+   docs/v60_grad_clip_equivalence_benchmark.json
+   docs/v60_source_port_equivalence_benchmark.json
+   docs/v60_box_qp_equivalence_benchmark.json
+
+No A30 is available inside this sandbox, so no GPU wall-clock number is claimed.

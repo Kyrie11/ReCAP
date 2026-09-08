@@ -49,18 +49,13 @@ def _nonfinite_gradient_report(model: torch.nn.Module, *, limit: int = 12) -> li
             break
     return report
 
-def _stable_clip_grad_norm_(parameters, max_norm: float, eps: float = 1.0e-12) -> float:
-    """Clip using a float64 norm so large finite float32 gradients do not overflow.
+def _stable_clip_grad_norm_reference_(grads: list[torch.Tensor], max_norm: float, eps: float = 1.0e-12) -> float:
+    """Rare fallback for pathological finite gradients.
 
-    ``torch.nn.utils.clip_grad_norm_`` can report ``inf`` when the individual
-    gradients are finite but the float32 reduction overflows.  That turns the
-    clipping coefficient into zero and silently erases the update.  Accumulate
-    the norm in float64 and apply one finite coefficient in-place instead.
+    This is the previous v59 implementation.  It deliberately accumulates every
+    element in float64 and is therefore expensive, but it is only used if the
+    fused fast path reports a non-finite norm.
     """
-    params = list(parameters)
-    grads = [p.grad for p in params if getattr(p, "grad", None) is not None]
-    if not grads:
-        return 0.0
     total_sq = torch.zeros((), dtype=torch.float64, device=grads[0].device)
     for grad in grads:
         detached = grad.detach()
@@ -74,6 +69,49 @@ def _stable_clip_grad_norm_(parameters, max_norm: float, eps: float = 1.0e-12) -
         coefficient = limit / (total + float(eps))
         for grad in grads:
             grad.mul_(coefficient)
+    return total
+
+
+def _stable_clip_grad_norm_(parameters, max_norm: float, eps: float = 1.0e-12) -> float:
+    """Overflow-safe clipping with one host synchronization per batch.
+
+    v59 checked finiteness and converted *every parameter gradient* to float64,
+    synchronizing CUDA repeatedly.  On the relatively compact PlanTF source port
+    those synchronizations can dominate the actual model kernels.
+
+    ``torch._foreach_norm`` computes all per-parameter L2 norms in fused foreach
+    kernels.  The small vector of scalar norms is then combined in float64, so the
+    cross-parameter reduction itself cannot overflow.  If that fused norm is still
+    non-finite we fall back to the conservative v59 elementwise float64 path,
+    preserving fail-closed behavior for genuinely bad gradients.
+    """
+    params = list(parameters)
+    grads = [p.grad for p in params if getattr(p, "grad", None) is not None]
+    if not grads:
+        return 0.0
+
+    try:
+        per_grad = torch._foreach_norm(grads, 2.0)
+        total_norm = torch.linalg.vector_norm(
+            torch.stack([x.to(dtype=torch.float64) for x in per_grad]), ord=2
+        )
+        total = float(total_norm.item())  # exactly one CUDA -> host sync
+    except (AttributeError, RuntimeError):
+        return _stable_clip_grad_norm_reference_(grads, max_norm, eps)
+
+    if not math.isfinite(total):
+        # Distinguish a rare norm-reduction overflow from genuine NaN/Inf values.
+        # This expensive fallback runs only on the exceptional path.
+        return _stable_clip_grad_norm_reference_(grads, max_norm, eps)
+
+    limit = max(float(max_norm), 0.0)
+    if total > limit and total > 0.0:
+        coefficient = limit / (total + float(eps))
+        try:
+            torch._foreach_mul_(grads, coefficient)
+        except (AttributeError, RuntimeError):
+            for grad in grads:
+                grad.mul_(coefficient)
     return total
 
 
@@ -582,7 +620,8 @@ def _epoch(model, loader, opt, device, cfg: dict[str, Any], train: bool, *, rank
     model.train(train)
     bcfg = cfg.get("external_baselines", {}) if isinstance(cfg.get("external_baselines", {}), dict) else {}
     tcfg = bcfg.get("training", {}) if isinstance(bcfg.get("training", {}), dict) else {}
-    totals: dict[str, float] = {}
+    metric_names: list[str] | None = None
+    totals_vec: torch.Tensor | None = None
     n = 0
     iterator = loader
     show = bool(tcfg.get("tqdm", True)) and rank == 0 and tqdm is not None
@@ -597,8 +636,15 @@ def _epoch(model, loader, opt, device, cfg: dict[str, Any], train: bool, *, rank
                 out = _forward_model(model, batch, cfg)
                 losses = _loss_dict(out, batch, cfg)
                 loss = losses["loss"]
-            bad_losses = {name: float(val.detach().float().cpu()) for name, val in losses.items() if not bool(torch.isfinite(val.detach()).all())}
-            if bad_losses:
+
+            # Check every scalar loss in one device reduction / one host sync.
+            loss_names = list(losses)
+            loss_scalars = torch.stack([losses[name].detach().float().reshape(()) for name in loss_names])
+            finite_mask = torch.isfinite(loss_scalars)
+            if not bool(finite_mask.all().item()):
+                vals = loss_scalars.detach().cpu().tolist()
+                good = finite_mask.detach().cpu().tolist()
+                bad_losses = {name: float(value) for name, value, is_good in zip(loss_names, vals, good) if not is_good}
                 raise FloatingPointError(
                     f"Non-finite external-baseline loss at epoch={epoch}, train={train}: {bad_losses}. "
                     "The optimizer step is intentionally aborted so NaNs cannot poison the checkpoint."
@@ -631,16 +677,33 @@ def _epoch(model, loader, opt, device, cfg: dict[str, Any], train: bool, *, rank
                     opt.step()
         bs = int(batch["x"].shape[0])
         n += bs
-        for name, val in losses.items():
-            totals[name] = totals.get(name, 0.0) + float(val.detach().cpu()) * bs
         with torch.no_grad():
             pred = torch.argmax(out["logits"], dim=-1)
-            acc = (pred == batch["target_index"]).float().mean()
-            totals["target_acc"] = totals.get("target_acc", 0.0) + float(acc.detach().cpu()) * bs
+            correct = (pred == batch["target_index"]).float().sum()
+            current_names = loss_names + ["target_acc"]
+            current = torch.cat([loss_scalars, correct.reshape(1)])
+            # Loss entries are means and therefore need batch-size weighting;
+            # ``correct`` is already a count.  Accumulate on device and transfer
+            # once at epoch end rather than synchronizing every metric every batch.
+            weighted = torch.cat([current[:-1] * float(bs), current[-1:]]).to(dtype=torch.float64)
+            if totals_vec is None:
+                metric_names = current_names
+                totals_vec = torch.zeros_like(weighted)
+            elif metric_names != current_names:
+                raise RuntimeError(f"external-baseline metric keys changed within epoch: {metric_names} -> {current_names}")
+            totals_vec.add_(weighted)
         if show:
+            # tqdm is opt-in; its display necessarily synchronizes this one scalar.
             iterator.set_postfix(loss=f"{float(loss.detach().cpu()):.4f}")
-    totals, n = _reduce_totals(totals, n, device)
-    return {k: v / max(n, 1) for k, v in totals.items()}
+
+    if totals_vec is None or metric_names is None:
+        return {}
+    packed = torch.cat([totals_vec, torch.tensor([float(n)], dtype=torch.float64, device=device)])
+    if _distributed_available():
+        dist.all_reduce(packed, op=dist.ReduceOp.SUM)
+    host = packed.detach().cpu().tolist()
+    total_n = int(host[-1])
+    return {name: float(value) / max(total_n, 1) for name, value in zip(metric_names, host[:-1])}
 
 
 def _model_state(model: torch.nn.Module) -> dict[str, torch.Tensor]:

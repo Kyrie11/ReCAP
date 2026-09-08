@@ -828,11 +828,21 @@ class ExternalGroupDataset(Dataset):
         bcfg = cfg.get("external_baselines", {}) if isinstance(cfg.get("external_baselines", {}), dict) else {}
         mcfg = bcfg.get("model", {}) if isinstance(bcfg.get("model", {}), dict) else {}
         self.arch = str(mcfg.get("arch", self.baseline)).lower()
+        self.implementation = str(mcfg.get("implementation", bcfg.get("implementation", ""))).lower()
         self.max_candidates = int(bcfg.get("max_candidates", max(len(g) for g in self.groups)))
         self.use_teacher_branch_context = use_teacher_branch_context(cfg)
         self.need_history = self.arch in {"gameformer", "gameformer_lite", "gameformer_levelk", "plantf", "plan_tf", "plantf_adapter", "pluto", "pluto_adapter"}
         self.need_prefix_traj = self.need_history or self.arch in {"route_bc_wayformer", "wayformer_bc", "wayformer_scene_bc"}
         self.need_source_scene = self.arch in {"gameformer", "gameformer_lite", "gameformer_levelk", "plantf", "plan_tf", "plantf_adapter", "pluto", "pluto_adapter", "route_bc_wayformer", "wayformer_bc", "wayformer_scene_bc"}
+        self.source_port_arch = (
+            self.implementation in {"source_port", "source_port_v54", "sourceported_v54"}
+            and self.arch in {"gameformer", "gameformer_lite", "gameformer_levelk", "plantf", "plan_tf", "plantf_adapter", "pluto", "pluto_adapter"}
+        )
+        # Source ports consume source_* actor/map tensors plus prefix_traj.  The
+        # older ego_history/neighbor_history bridge is ignored by these models;
+        # constructing, repeating across candidates, collating and H2D-copying it
+        # was pure overhead.  Keep the legacy tensors for non-source adapters.
+        self.materialize_legacy_history = self.need_history and not self.source_port_arch
         # Source-ported GameFormer/PlanTF/PLUTO consume candidate-independent
         # actor/map tensors. Candidate-specific BeTop topology construction is
         # therefore no longer paid for by these safe baselines.
@@ -848,12 +858,14 @@ class ExternalGroupDataset(Dataset):
             self.num_options = _cfg_int(cfg, ("external_baselines", "model", "num_options"), _cfg_int(cfg, ("num_recovery_options",), 12))
             self.root_feature_dim = _cfg_int(cfg, ("external_baselines", "model", "root_feature_dim"), 18)
 
-        if self.need_history:
+        if self.materialize_legacy_history:
             ego0, neigh0, _, prefix0, _ = _history_arrays(first, cfg)
             self.history_len = int(ego0.shape[0])
             self.neighbors_to_predict = int(neigh0.shape[0])
             self.future_len = int(prefix0.shape[0])
         else:
+            # Source ports still persist these geometry values in checkpoints,
+            # but do not need the redundant legacy tensors to discover them.
             self.history_len = _cfg_int(cfg, ("external_baselines", "model", "history_len"), 0)
             self.neighbors_to_predict = _cfg_int(cfg, ("external_baselines", "model", "neighbors_to_predict"), 0)
             self.future_len = _cfg_int(cfg, ("external_baselines", "model", "future_len"), 20 if self.need_prefix_traj else 0)
@@ -909,7 +921,7 @@ class ExternalGroupDataset(Dataset):
                 "root_valid": np.zeros((self.max_candidates, self.num_roots), dtype=bool),
                 "option_valid": np.zeros((self.max_candidates, self.num_options), dtype=bool),
             })
-        if self.need_history:
+        if self.materialize_legacy_history:
             out_arrays.update({
                 "ego_history": np.zeros((self.max_candidates, self.history_len, GAMEFORMER_STATE_DIM), dtype=np.float32),
                 "neighbor_history": np.zeros((self.max_candidates, self.neighbors_to_predict, self.history_len, GAMEFORMER_STATE_DIM), dtype=np.float32),
@@ -949,7 +961,7 @@ class ExternalGroupDataset(Dataset):
             x[:n] = feature_matrix[:n]
             mask[:n] = True
 
-        shared_history = _history_scene_arrays(samples[0], self.cfg) if self.need_history and samples else None
+        shared_history = _history_scene_arrays(samples[0], self.cfg) if self.materialize_legacy_history and samples else None
         shared_topology = _topology_scene_context(samples[0], self.cfg) if self.need_topology and samples else None
         shared_origin = np.zeros((2,), dtype=np.float32); shared_rot = np.eye(2, dtype=np.float32)
         if shared_history is not None:
@@ -971,7 +983,7 @@ class ExternalGroupDataset(Dataset):
                 out_arrays["root_probs"][i] = rp
                 out_arrays["root_valid"][i] = rv
                 out_arrays["option_valid"][i] = ov
-            if self.need_history:
+            if self.materialize_legacy_history:
                 # Candidates in one group share scene/time history.
                 out_arrays["ego_history"][i] = shared_eh
                 out_arrays["neighbor_history"][i] = shared_nh
